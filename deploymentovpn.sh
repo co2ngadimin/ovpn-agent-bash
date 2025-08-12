@@ -1,15 +1,14 @@
 #!/bin/bash
 #
-# deploymentovpn.sh FINNNALLLL
+# deploymentovpn.sh (MODIFIKASI dengan venv)
 #
 # Skrip ini mengotomatiskan deployment OpenVPN Agent pada server baru.
-# Ini akan menginstal dependensi, menyebarkan skrip agen Python dan skrip
-# manager klien OpenVPN, dan mengkonfigurasinya untuk dijalankan dengan PM2
-# menggunakan file ecosystem.config.js kustom.
+# Ini akan menginstal dependensi, membuat Python virtual environment (venv),
+# menyebarkan skrip agen dan manajer klien, dan mengkonfigurasinya untuk
+# dijalankan dengan PM2 dari dalam venv.
 #
 # Usage: ./deploymentovpn.sh
-#   
-#   
+#
 # Keluar segera jika ada perintah yang keluar dengan status non-nol.
 set -e
 
@@ -24,7 +23,8 @@ NODE_URL="https://nodejs.org/dist/$NODE_VERSION/$NODE_DIR.tar.gz"
 # Dapatkan nama pengguna yang menjalankan sudo
 SUDO_USER=${SUDO_USER:-$(whoami)}
 # MODIFIKASI: Pastikan SCRIPT_DIR selalu di home directory SUDO_USER
-SCRIPT_DIR="/home/$SUDO_USER/openvpn-agent" 
+SCRIPT_DIR="/home/$SUDO_USER/openvpn-agent"
+VENV_PATH="$SCRIPT_DIR/venv" ## PERUBAHAN VENV: Definisikan path venv
 EASY_RSA_INDEX_PATH=""
 EASY_RSA_SERVER_NAME_PATH=""
 
@@ -108,7 +108,7 @@ get_user_input() {
                         if [[ "$DASHBOARD_HOST_RAW" =~ ^(http|https):// ]]; then
                             PROTOCOL=$(echo "$DASHBOARD_HOST_RAW" | grep -oE '^(http|https)://')
                             # Hapus protokol untuk validasi dan penanganan selanjutnya
-                            DASHBOARD_HOST_CLEAN=${DASHBOARD_HOST_RAW#*//} 
+                            DASHBOARD_HOST_CLEAN=${DASHBOARD_HOST_RAW#*//}
                         else
                             PROTOCOL="https://" # Default ke HTTPS jika tidak ada protokol yang diberikan
                             DASHBOARD_HOST_CLEAN=$DASHBOARD_HOST_RAW
@@ -221,18 +221,18 @@ check_openvpn_service() {
     return 1
 }
 
-#Instal dependensi sistem, Node.js, dan Python
+# Instal dependensi sistem, Node.js, dan Python
 install_dependencies() {
-    echo "⚙️  Installing system dependencies..."
+    echo "⚙️  Menginstal dependensi sistem..."
     apt-get update
-    apt-get install -y openvpn python3 python3-pip expect curl dos2unix
+    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix ## PERUBAHAN VENV: Tambahkan python3-venv
 
     # Perbaiki line endings script ini
     dos2unix "$0"
 
-    echo "⚙️  Installing Node.js manually..."
+    echo "⚙️  Menginstal Node.js secara manual..."
     if ! command -v node &> /dev/null; then
-        echo "Node.js not found. Installing..."
+        echo "Node.js tidak ditemukan. Menginstal..."
         curl -o /tmp/"$NODE_DIR".tar.gz "$NODE_URL"
         tar -xzf /tmp/"$NODE_DIR".tar.gz -C /tmp/
         mkdir -p /usr/local/lib/nodejs
@@ -242,28 +242,22 @@ install_dependencies() {
         ln -s /usr/local/lib/nodejs/"$NODE_DIR"/bin/npm /usr/bin/npm
         ln -s /usr/local/lib/nodejs/"$NODE_DIR"/bin/npx /usr/bin/npx
 
-        echo "✅ Verifying Node.js installation..."
+        echo "✅ Verifikasi instalasi Node.js..."
         node -v
-        echo "✅ Node.js installed."
+        echo "✅ Node.js terinstal."
     else
-        echo "☑️ Node.js is already installed. Skipping."
+        echo "☑️ Node.js sudah terinstal. Melewati."
     fi
 
-    echo "⚙️  Installing PM2..."
-    # MODIFIKASI: Instal PM2 sebagai SUDO_USER dengan sudo
+    echo "⚙️  Menginstal PM2..."
     sudo npm install -g pm2
 
-    # Konfigurasi PM2 PATH - sesuai permintaan
-    echo "🔗 Configuring PM2 PATH..."
-    
-    # Dapatkan jalur prefix npm untuk SUDO_USER
-    # Gunakan subshell dengan bash -c untuk memastikan npm config get prefix berjalan di lingkungan pengguna
+    # Konfigurasi PM2 PATH
+    echo "🔗 Mengkonfigurasi PM2 PATH..."
     NPM_GLOBAL_BIN_PATH=$(sudo -u "$SUDO_USER" bash -c "npm config get prefix")/bin
     echo "ℹ️ Jalur global NPM yang terdeteksi untuk $SUDO_USER: $NPM_GLOBAL_BIN_PATH"
 
-    # Tentukan file profil shell pengguna
     SHELL_PROFILE=""
-    # Jika berjalan sebagai root, gunakan /root/ sebagai home directory
     if [ "$USER" = "root" ] || [ "$SUDO_USER" = "root" ]; then
         HOME_DIR="/root"
     else
@@ -275,92 +269,48 @@ install_dependencies() {
     elif [ -f "$HOME_DIR/.bashrc" ]; then
         SHELL_PROFILE="$HOME_DIR/.bashrc"
     else
-        # Buat .bashrc jika tidak ada
-        echo "📝 Creating .bashrc file at $HOME_DIR/.bashrc"
         touch "$HOME_DIR/.bashrc"
         SHELL_PROFILE="$HOME_DIR/.bashrc"
     fi
 
     if [ -n "$SHELL_PROFILE" ]; then
-        # Cek apakah PATH sudah ada di file konfigurasi dengan grep yang lebih spesifik
-        # Menggunakan grep untuk mencari string path secara langsung
         if ! grep -q "$NPM_GLOBAL_BIN_PATH" "$SHELL_PROFILE" 2>/dev/null; then
-            echo "🔗 Adding PATH to $SHELL_PROFILE..."
-            # MODIFIKASI: Gunakan sudo tee untuk menulis ke file profil pengguna
             echo "export PATH=\"\$PATH:$NPM_GLOBAL_BIN_PATH\"" | sudo tee -a "$SHELL_PROFILE" > /dev/null
-
-            # Verifikasi bahwa baris telah ditambahkan
-            if grep -q "$NPM_GLOBAL_BIN_PATH" "$SHELL_PROFILE"; then
-                echo "✅ Path Node.js global binaries ditambahkan ke $SHELL_PROFILE."
-                
-                # Source bashrc dan update PATH untuk session saat ini
-                echo "🔄 Updating current session PATH..."
-                export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
-                
-                # Source file untuk memastikan perubahan tersimpan
-                if [[ "$SHELL_PROFILE" == *".bashrc" ]]; then
-                    # MODIFIKASI: Source sebagai SUDO_USER
-                    sudo -u "$SUDO_USER" bash -c "source $SHELL_PROFILE" 2>/dev/null || echo "⚠️ Unable to source automatically."
-                fi
-                
-                # Buat symlink PM2 ke /usr/local/bin agar globally accessible
-                echo "🔗 Creating global symlink for PM2..."
-                if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
-                    ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
-                    ln -sf "$NPM_GLOBAL_BIN_PATH/node" /usr/local/bin/node 2>/dev/null || true
-                    ln -sf "$NPM_GLOBAL_BIN_PATH/npm" /usr/local/bin/npm 2>/dev/null || true
-                    ln -sf "$NPM_GLOBAL_BIN_PATH/npx" /usr/local/bin/npx 2>/dev/null || true
-                    echo "✅ Global symlinks created. PM2 should now be accessible immediately."
-                else
-                    echo "⚠️ PM2 binary not found at expected location."
-                fi
-                
-                echo "ℹ️ **PENTING:** PATH sudah diupdate untuk session ini dan akan tersedia di session baru."
-            else
-                echo "❌ Gagal menambahkan path ke $SHELL_PROFILE. Periksa izin file atau konfigurasi shell."
-            fi
-        else
-            echo "☑️ Path Node.js global binaries sudah ada di $SHELL_PROFILE."
-            # Tetap update PATH untuk session saat ini jika belum ada
-            if [[ ":$PATH:" != *":$NPM_GLOBAL_BIN_PATH:"* ]]; then
-                echo "🔄 Updating current session PATH..."
-                export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
-                
-                # Buat symlink PM2 ke /usr/local/bin agar globally accessible
-                echo "🔗 Creating global symlink for PM2..."
-                if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
-                    ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
-                    echo "✅ Global symlinks updated."
-                fi
-            fi
+            export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
+        fi
+        if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
+            ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
         fi
     fi
 
-    # Verifikasi PM2 installation
-    echo "✅ Verifying PM2 installation..."
     if command -v pm2 &> /dev/null; then
-        echo "✅ PM2 is accessible via command line."
+        echo "✅ PM2 dapat diakses dari baris perintah."
         pm2 --version
     else
-        echo "⚠️ PM2 not found in PATH. Trying with full path..."
-        if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
-            echo "✅ PM2 found at: $NPM_GLOBAL_BIN_PATH/pm2"
-            "$NPM_GLOBAL_BIN_PATH/pm2" --version
-        else
-            echo "❌ PM2 installation may have failed."
-        fi
+        echo "❌ Instalasi PM2 mungkin gagal."
     fi
 
-    echo "⚙️  Installing Python dependencies..."
-    pip3 install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp
-    echo "✅ Dependencies installed."
+    ## =======================================================
+    ## PERUBAHAN VENV: Membuat Virtual Environment dan Instalasi Paket Python
+    ## =======================================================
+    echo "🐍 Membuat Python virtual environment di $VENV_PATH..."
+    # Buat venv sebagai SUDO_USER untuk memastikan kepemilikan yang benar
+    sudo -u "$SUDO_USER" python3 -m venv "$VENV_PATH"
+
+    echo "📦 Menginstal dependensi Python di dalam venv..."
+    # Jalankan pip dari dalam venv untuk menginstal paket secara lokal
+    sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install --upgrade pip
+    sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp
+
+    echo "✅ Dependensi Python terinstal di dalam virtual environment."
+    ## =======================================================
 }
+
 
 # Buat file .env dari input user
 create_env_file() {
-    echo "📄 Creating .env file..."
-    mkdir -p "$SCRIPT_DIR/logs"
-    # Use tee to create the .env file with sudo permissions
+    echo "📄 Membuat file .env..."
+    # Gunakan tee untuk membuat file .env dengan izin sudo
     cat << EOF | sudo tee "$SCRIPT_DIR/.env" > /dev/null
 AGENT_API_KEY="$AGENT_API_KEY"
 SERVER_ID="$SERVER_ID"
@@ -370,22 +320,21 @@ OVPN_DIR="$OVPN_DIR"
 EASY_RSA_INDEX_PATH="$EASY_RSA_INDEX_PATH"
 EASY_RSA_SERVER_NAME_PATH="$EASY_RSA_SERVER_NAME_PATH"
 EOF
-    echo "✅ .env file created."
+    echo "✅ File .env berhasil dibuat."
 }
 
 
 # Deploy skrip Python dan Bash
 deploy_scripts() {
-    echo "📂 Deploying scripts to $SCRIPT_DIR..."
-    mkdir -p "$SCRIPT_DIR"
-    # MODIFIKASI: Pastikan kepemilikan direktori dan isinya benar untuk SUDO_USER
-    chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
+    echo "📂 Menyebarkan skrip ke $SCRIPT_DIR..."
+    # Direktori sudah dibuat sebelumnya, hanya memastikan ada folder logs
     mkdir -p "$SCRIPT_DIR/logs"
 
-    # Save the Python agent script
-    echo "📄 Writing Python agent script to $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
-    # MODIFIKASI: Gunakan sudo tee untuk menulis file sebagai SUDO_USER
+    # Simpan skrip agen Python
+    echo "📄 Menulis skrip agen Python ke $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
+    # Gunakan sudo tee untuk menulis file sebagai SUDO_USER
     cat << '_PYTHON_SCRIPT_EOF_' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" > /dev/null
+# [ ISI KONTEN main.py YANG SAMA SEPERTI ASLINYA DI SINI ]
 # main.py (Modifikasi Agen FastAPI Anda)
 
 from fastapi import FastAPI, HTTPException, Request
@@ -854,12 +803,11 @@ def revoke_user_direct(username: str):
 
     return {"detail": f"User {username} revoked"}
 _PYTHON_SCRIPT_EOF_
-    chmod -v +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" # Pastikan script Python juga executable
+    chmod -v +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
     echo "✅ Skrip agen Python berhasil di-deploy."
 
     # Simpan skrip manajer klien
     echo "📄 Menulis skrip manajer klien ke $SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME..."
-    # MODIFIKASI: Gunakan sudo tee untuk menulis file sebagai SUDO_USER
     cat << 'CLIENT_MANAGER_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
 #!/bin/bash
 # shellcheck disable=SC2164,SC2034
@@ -949,13 +897,14 @@ CLIENT_MANAGER_EOF
 
 # Buat file konfigurasi PM2 berdasarkan input user
 create_pm2_ecosystem_file() {
-    echo "📄 Creating ecosystem.config.js file..."
-    # MODIFIKASI: Gunakan sudo tee untuk menulis file sebagai SUDO_USER
+    echo "📄 Membuat file ecosystem.config.js..."
+    # Gunakan sudo tee untuk menulis file sebagai SUDO_USER
     cat << EOF | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/ecosystem.config.js" > /dev/null
 module.exports = {
   apps: [{
     name: "$APP_NAME",
-    script: "/usr/bin/python3",
+    ## PERUBAHAN VENV: Arahkan 'script' ke interpreter Python di dalam venv
+    script: "$VENV_PATH/bin/python",
     args: "-m uvicorn main:app --host 0.0.0.0 --port 8080",
     cwd: "$SCRIPT_DIR",
     exec_mode: "fork",
@@ -979,18 +928,17 @@ module.exports = {
   }]
 };
 EOF
-    echo "✅ ecosystem.config.js file created."
+    echo "✅ File ecosystem.config.js berhasil dibuat."
 }
 
 # Konfigurasi PM2 untuk menjalankan agen Python
 configure_pm2() {
     echo "🚀 Mengkonfigurasi PM2..."
     cd "$SCRIPT_DIR" || exit
-    # MODIFIKASI: Jalankan pm2 start dan pm2 save sebagai SUDO_USER
+    # Jalankan pm2 start dan pm2 save sebagai SUDO_USER
     sudo -u "$SUDO_USER" pm2 start ecosystem.config.js
     sudo -u "$SUDO_USER" pm2 save
-    # MODIFIKASI: Jalankan pm2 startup untuk membuat script startup sistem
-    # Ini akan membuat script startup yang menjalankan PM2 sebagai SUDO_USER
+    # Jalankan pm2 startup untuk membuat script startup sistem
     pm2 startup systemd -u "$SUDO_USER" --hp "/home/$SUDO_USER"
     echo "✅ PM2 dikonfigurasi. Agen sedang berjalan."
 }
@@ -999,6 +947,11 @@ configure_pm2() {
 
 check_sudo
 get_user_input
+
+## PERUBAHAN VENV: Buat direktori skrip di awal
+echo "📂 Membuat direktori agen di $SCRIPT_DIR..."
+mkdir -p "$SCRIPT_DIR"
+chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
 
 if ! find_easy_rsa_path; then
     exit 1
@@ -1020,6 +973,4 @@ deploy_scripts
 create_pm2_ecosystem_file
 configure_pm2
 
-echo "🎉 Deployment OpenVPN agent selesai dengan sukses!"
-
-#Final ki astagfirullah
+echo "🎉 Deployment OpenVPN agent dengan venv selesai dengan sukses!"
