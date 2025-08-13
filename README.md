@@ -38,7 +38,7 @@ Tujuan utama skrip ini adalah untuk menghilangkan langkah-langkah manual yang re
 
 ### 1. Salin Skrip ke Server
 ```bash
-scp /path/to/local/deploymentovpn.sh user@your_server_ip:~/
+wget https://raw.githubusercontent.com/SoramiKS/ovpn-agent-bash/refs/heads/main/deploymentovpn.sh
 ```
 
 ### 2. Berikan Izin Eksekusi
