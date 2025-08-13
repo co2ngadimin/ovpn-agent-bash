@@ -101,11 +101,18 @@ tail -f ./openvpn-agent/logs/agent-err.log
 
 ## 🔗 Integrasi dengan OpenVPN Management Dashboard
 
-- Pastikan `AGENT_API_KEY` dan `SERVER_ID` sesuai dengan yang terdaftar di dashboard.
-- Dashboard akan otomatis mendeteksi agen yang terhubung dan menampilkan statusnya.
-- Semua profil VPN yang dikelola agen akan sinkron dengan dashboard.
+Agen ini dirancang untuk bekerja bersama [**OpenVPN Management Dashboard**](https://github.com/SoramiKS/openvpn-dashboard).  
+Dashboard tersebut menyediakan antarmuka web modern untuk memantau dan mengelola server OpenVPN yang terhubung dengan agen ini.
+
+**Langkah integrasi:**
+1. Install dan jalankan dashboard dari repositori berikut:  
+   🔗 https://github.com/SoramiKS/openvpn-dashboard
+2. Gunakan **AGENT_API_KEY** yang sama di dashboard dan agen.
+3. Pastikan **SERVER_ID** di agen unik untuk setiap server.
+4. Setelah agen dijalankan, dashboard akan otomatis mendeteksi koneksi dan menampilkan informasi server beserta daftar profil VPN.
 
 ---
+
 
 ## 📜 Lisensi
 Proyek ini dilisensikan di bawah **MIT License**.
