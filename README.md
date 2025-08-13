@@ -31,6 +31,8 @@ Tujuan utama skrip ini adalah untuk menghilangkan langkah-langkah manual yang re
 - Server Debian/Ubuntu baru.
 - Akses root atau hak sudo.
 - Skrip utama instalasi OpenVPN (`ubuntu-22.04-lts-vpn-server.sh`) sudah ada di `/root/`.
+- Untuk penginstalan OpenVPN nya bisa dari tutorial berikut:
+https://www.cyberciti.biz/faq/ubuntu-22-04-lts-set-up-openvpn-server-in-5-minutes/
 
 ---
 
