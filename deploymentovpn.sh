@@ -225,7 +225,7 @@ check_openvpn_service() {
 install_dependencies() {
     echo "⚙️  Menginstal dependensi sistem..."
     apt-get update
-    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix ## PERUBAHAN VENV: Tambahkan python3-venv
+    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix 
 
     # Perbaiki line endings script ini
     dos2unix "$0"
@@ -903,7 +903,6 @@ create_pm2_ecosystem_file() {
 module.exports = {
   apps: [{
     name: "$APP_NAME",
-    ## PERUBAHAN VENV: Arahkan 'script' ke interpreter Python di dalam venv
     script: "$VENV_PATH/bin/python",
     args: "-m uvicorn main:app --host 0.0.0.0 --port 8080",
     cwd: "$SCRIPT_DIR",
