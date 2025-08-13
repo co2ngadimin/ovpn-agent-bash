@@ -22,8 +22,11 @@ NODE_URL="https://nodejs.org/dist/$NODE_VERSION/$NODE_DIR.tar.gz"
 
 # Dapatkan nama pengguna yang menjalankan sudo
 SUDO_USER=${SUDO_USER:-$(whoami)}
-# MODIFIKASI: Pastikan SCRIPT_DIR selalu di home directory SUDO_USER
-SCRIPT_DIR="/home/$SUDO_USER/openvpn-agent"
+# --- SOLUSI: Tentukan direktori berdasarkan lokasi skrip saat ini ---
+# Dapatkan path absolut dari direktori tempat skrip ini berada
+BASE_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+# Tentukan direktori kerja utama di dalam lokasi tersebut
+SCRIPT_DIR="$BASE_DIR/openvpn-agent"
 VENV_PATH="$SCRIPT_DIR/venv" ## PERUBAHAN VENV: Definisikan path venv
 EASY_RSA_INDEX_PATH=""
 EASY_RSA_SERVER_NAME_PATH=""
