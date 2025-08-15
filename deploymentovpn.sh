@@ -858,6 +858,7 @@ module.exports = {
       OVPN_DIR: "$OVPN_DIR",
       EASY_RSA_INDEX_PATH: "$EASY_RSA_INDEX_PATH",
       EASY_RSA_SERVER_NAME_PATH: "$EASY_RSA_SERVER_NAME_PATH"
+      OVPN_ACTIVITY_LOG_PATH="/var/log/openvpn/user_activity.log"
     },
     output: "$SCRIPT_DIR/logs/agent-out.log",
     error: "$SCRIPT_DIR/logs/agent-err.log",
