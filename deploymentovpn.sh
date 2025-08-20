@@ -228,7 +228,7 @@ check_openvpn_service() {
 install_dependencies() {
     echo "⚙️  Menginstal dependensi sistem..."
     apt-get update
-    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix 
+    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix at
 
     # Perbaiki line endings script ini
     dos2unix "$0"
@@ -683,16 +683,27 @@ async def background_task_loop():
                         run([SCRIPT_PATH, "revoke", username], check=True)
                         execution_result["message"] = f"User {username} revoked."
                     elif log_entry.action == "DECOMMISSION_AGENT":
-                        # Panggil skrip penghapusan mandiri dan keluar
-                        # Nama aplikasi PM2 didapat dari nama file ecosystem
-                        # atau bisa juga diambil dari environment variable
-                        app_name = os.getenv("PM2_APP_NAME", SERVER_ID) # Gunakan SERVER_ID sebagai fallback
-                        
-                        run(["/bin/bash", f"{SCRIPT_DIR}/self-destruct.sh", app_name], check=True)
-                        
-                        # Setelah ini, skrip akan berhenti karena sudah dihapus
-                        # Tidak perlu melaporkan kembali ke dashboard
-                        execution_result["message"] = f"Decommission command executed for {app_name}."
+                        try:
+                            print(f"Sending decommission confirmation for {SERVER_ID}...")
+                            # Kirim sinyal "napas terakhir" ke dashboard
+                            requests.post(
+                                f"{DASHBOARD_API_URL}/agent/decommission-complete",
+                                json={"serverId": SERVER_ID},
+                                headers=headers,
+                                timeout=5
+                            )
+                            print("Decommission signal sent successfully.")
+                        except Exception as e:
+                            print(f"Could not send decommission signal: {e}")
+                        finally:
+                            # Jadwalkan penghapusan mandiri agar berjalan independen
+                            print("Scheduling self-destruct script...")
+                            app_name = os.getenv("PM2_APP_NAME", SERVER_ID)
+                            command = f"sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}"
+                            schedule_command = f'echo "{command}" | at now + 10 seconds'
+                            run(schedule_command, shell=True, check=True)
+                        # Jangan lapor balik, langsung lanjut ke iterasi berikutnya
+                        continue
 
                     if log_entry.action != "DECOMMISSION_AGENT":
                         await asyncio.to_thread(
@@ -845,8 +856,7 @@ CLIENT_MANAGER_EOF
 echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
 cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
 #!/bin/bash
-# self-destruct.sh (v3 - Final)
-
+# self-destruct.sh (Final & Robust Version)
 set -e
 
 if [ "$EUID" -ne 0 ]; then
@@ -855,13 +865,11 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 PM2_APP_NAME="$1"
-# PERBAIKAN: Cara yang lebih sederhana dan aman untuk mendapatkan direktori
 AGENT_DIR=$(dirname "$(readlink -f "$0")")
 
 echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
 
 echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
-# Jalankan pm2 sebagai root (karena seluruh skrip dijalankan dengan sudo)
 pm2 stop "$PM2_APP_NAME"
 pm2 delete "$PM2_APP_NAME"
 pm2 save --force
@@ -895,8 +903,8 @@ module.exports = {
     env: {
       NODE_ENV: "production",
       AGENT_API_KEY: "$AGENT_API_KEY",
-      PM2_APP_NAME: "$APP_NAME",
       SERVER_ID: "$SERVER_ID",
+      PM2_APP_NAME: "$APP_NAME", // <-- PASTIKAN BARIS INI ADA
       DASHBOARD_API_URL: "$DASHBOARD_API_URL",
       SCRIPT_PATH: "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME",
       OVPN_DIR: "$OVPN_DIR",
