@@ -845,6 +845,8 @@ CLIENT_MANAGER_EOF
 echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
 cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
 #!/bin/bash
+# self-destruct.sh (v3 - Final)
+
 set -e
 
 if [ "$EUID" -ne 0 ]; then
@@ -852,15 +854,16 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-APP_NAME="$1"
-AGENT_DIR=\$( cd -- "$( dirname -- "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+PM2_APP_NAME="$1"
+# PERBAIKAN: Cara yang lebih sederhana dan aman untuk mendapatkan direktori
+AGENT_DIR=$(dirname "$(readlink -f "$0")")
 
-echo "🛑 Menerima perintah penghapusan mandiri untuk '$APP_NAME'..."
+echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
 
-echo "[-] Menghentikan dan menghapus proses PM2: $APP_NAME"
-# --- PERBAIKAN: Hapus '|| echo ...' agar error bisa menghentikan skrip ---
-pm2 stop "$APP_NAME"
-pm2 delete "$APP_NAME"
+echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
+# Jalankan pm2 sebagai root (karena seluruh skrip dijalankan dengan sudo)
+pm2 stop "$PM2_APP_NAME"
+pm2 delete "$PM2_APP_NAME"
 pm2 save --force
 
 echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
@@ -868,6 +871,7 @@ rm -rf "$AGENT_DIR"
 
 echo "✅ Proses penghapusan mandiri agen selesai."
 SELF_DESTRUCT_EOF
+
 chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
 echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
 }
