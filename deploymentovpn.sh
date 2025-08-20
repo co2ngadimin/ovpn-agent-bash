@@ -359,8 +359,13 @@ from datetime import datetime, timezone
 import hashlib
 from typing import List, Optional # NEW: Import List and Optional for typing
 
-# Load .env variables
-load_dotenv()
+# --- PERBAIKAN DI SINI ---
+# Secara otomatis dapatkan path direktori tempat skrip ini berada
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env variables dari direktori yang benar
+load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, '.env'))
+# --- AKHIR PERBAIKAN ---
 
 app = FastAPI()
 
@@ -372,7 +377,6 @@ SCRIPT_PATH = os.getenv("SCRIPT_PATH", "./openvpn-client-manager.sh")
 OVPN_DIR = os.getenv("OVPN_DIR", "/home/ovpn")
 EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH", "/etc/openvpn/easy-rsa/pki/index.txt")
 EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH", "/etc/openvpn/easy-rsa/SERVER_NAME_GENERATED")
-# NEW: Get the path for the user activity log
 OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH", "/var/log/openvpn/user_activity.log")
 
 
