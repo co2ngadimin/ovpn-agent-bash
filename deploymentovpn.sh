@@ -852,15 +852,15 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-PM2_APP_NAME="$1"
+APP_NAME="$1"
 AGENT_DIR=\$( cd -- "$( dirname -- "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
+echo "🛑 Menerima perintah penghapusan mandiri untuk '$APP_NAME'..."
 
-echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
+echo "[-] Menghentikan dan menghapus proses PM2: $APP_NAME"
 # --- PERBAIKAN: Hapus '|| echo ...' agar error bisa menghentikan skrip ---
-pm2 stop "$PM2_APP_NAME"
-pm2 delete "$PM2_APP_NAME"
+pm2 stop "$APP_NAME"
+pm2 delete "$APP_NAME"
 pm2 save --force
 
 echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
