@@ -228,7 +228,7 @@ check_openvpn_service() {
 install_dependencies() {
     echo "⚙️  Menginstal dependensi sistem..."
     apt-get update
-    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix 
+    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix at
 
     # Perbaiki line endings script ini
     dos2unix "$0"
@@ -359,8 +359,8 @@ from datetime import datetime, timezone
 import hashlib
 from typing import List, Optional # NEW: Import List and Optional for typing
 
-# Load .env variables
-load_dotenv()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, '.env'))
 
 app = FastAPI()
 
@@ -372,7 +372,6 @@ SCRIPT_PATH = os.getenv("SCRIPT_PATH", "./openvpn-client-manager.sh")
 OVPN_DIR = os.getenv("OVPN_DIR", "/home/ovpn")
 EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH", "/etc/openvpn/easy-rsa/pki/index.txt")
 EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH", "/etc/openvpn/easy-rsa/SERVER_NAME_GENERATED")
-# NEW: Get the path for the user activity log
 OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH", "/var/log/openvpn/user_activity.log")
 
 
@@ -683,12 +682,37 @@ async def background_task_loop():
                         username = sanitize_username(log_entry.details)
                         run([SCRIPT_PATH, "revoke", username], check=True)
                         execution_result["message"] = f"User {username} revoked."
+                    elif log_entry.action == "DECOMMISSION_AGENT":
+                        try:
+                            # LANGKAH 1: Kirim sinyal "selesai" sebagai "napas terakhir"
+                            print(f"Sending decommission confirmation for {SERVER_ID}...")
+                            requests.post(
+                                f"{DASHBOARD_API_URL}/agent/decommission-complete",
+                                json={"serverId": SERVER_ID},
+                                headers=headers,
+                                timeout=5
+                            )
+                            print("Decommission signal sent.")
+                        
+                        except Exception as e:
+                            print(f"Could not send decommission signal: {e}")
+                        
+                        finally:
+                            # LANGKAH 2: Jadwalkan penghapusan mandiri, tidak peduli sinyal berhasil atau tidak
+                            print("Scheduling self-destruct script...")
+                            app_name = os.getenv("PM2_APP_NAME", SERVER_ID)
+                            command = f"nohup sh -c 'sleep 10 && sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}' > /dev/null 2>&1 &"
+                            run(command, shell=True, check=True)
+                            
+                            # Hentikan agen untuk mencegah loop
+                            sys.exit(0)
 
-                    await asyncio.to_thread(
-                        requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
-                        json={"actionLogId": log_entry.id, "status": execution_result["status"], "message": execution_result["message"], "ovpnFileContent": execution_result["ovpnFileContent"]},
-                        headers=headers
-                    )
+                    if log_entry.action != "DECOMMISSION_AGENT":
+                        await asyncio.to_thread(
+                            requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
+                            json={"actionLogId": log_entry.id, "status": execution_result["status"], "message": execution_result["message"], "ovpnFileContent": execution_result["ovpnFileContent"]},
+                            headers=headers
+                        )
                 except Exception as e:
                     print(f"Error processing action log {action_log.get('id', 'N/A')}: {e}")
                     await asyncio.to_thread(
@@ -831,6 +855,35 @@ esac
 CLIENT_MANAGER_EOF
     chmod -v +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
     echo "✅ Skrip manajer klien berhasil di-deploy."
+echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
+cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
+#!/bin/bash
+# self-destruct.sh (Final & Robust Version)
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ Skrip ini harus dijalankan dengan sudo."
+    exit 1
+fi
+
+PM2_APP_NAME="$1"
+AGENT_DIR=$(dirname "$(readlink -f "$0")")
+
+echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
+
+echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
+pm2 stop "$PM2_APP_NAME"
+pm2 delete "$PM2_APP_NAME"
+pm2 save --force
+
+echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
+rm -rf "$AGENT_DIR"
+
+echo "✅ Proses penghapusan mandiri agen selesai."
+SELF_DESTRUCT_EOF
+
+chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
+echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
 }
 
 # Buat file konfigurasi PM2 berdasarkan input user
@@ -853,12 +906,13 @@ module.exports = {
       NODE_ENV: "production",
       AGENT_API_KEY: "$AGENT_API_KEY",
       SERVER_ID: "$SERVER_ID",
+      PM2_APP_NAME: "$APP_NAME", // <-- PASTIKAN BARIS INI ADA
       DASHBOARD_API_URL: "$DASHBOARD_API_URL",
       SCRIPT_PATH: "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME",
       OVPN_DIR: "$OVPN_DIR",
       EASY_RSA_INDEX_PATH: "$EASY_RSA_INDEX_PATH",
-      EASY_RSA_SERVER_NAME_PATH: "$EASY_RSA_SERVER_NAME_PATH"
-      OVPN_ACTIVITY_LOG_PATH="/var/log/openvpn/user_activity.log"
+      EASY_RSA_SERVER_NAME_PATH: "$EASY_RSA_SERVER_NAME_PATH",
+      OVPN_ACTIVITY_LOG_PATH: "/var/log/openvpn/user_activity.log"
     },
     output: "$SCRIPT_DIR/logs/agent-out.log",
     error: "$SCRIPT_DIR/logs/agent-err.log",
