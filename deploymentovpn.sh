@@ -891,6 +891,7 @@ module.exports = {
     env: {
       NODE_ENV: "production",
       AGENT_API_KEY: "$AGENT_API_KEY",
+      PM2_APP_NAME: "$APP_NAME",
       SERVER_ID: "$SERVER_ID",
       DASHBOARD_API_URL: "$DASHBOARD_API_URL",
       SCRIPT_PATH: "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME",
