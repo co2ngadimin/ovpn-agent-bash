@@ -359,13 +359,8 @@ from datetime import datetime, timezone
 import hashlib
 from typing import List, Optional # NEW: Import List and Optional for typing
 
-# --- PERBAIKAN DI SINI ---
-# Secara otomatis dapatkan path direktori tempat skrip ini berada
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Load .env variables dari direktori yang benar
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, '.env'))
-# --- AKHIR PERBAIKAN ---
 
 app = FastAPI()
 
