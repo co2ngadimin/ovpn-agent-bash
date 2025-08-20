@@ -684,26 +684,28 @@ async def background_task_loop():
                         execution_result["message"] = f"User {username} revoked."
                     elif log_entry.action == "DECOMMISSION_AGENT":
                         try:
+                            # LANGKAH 1: Kirim sinyal "selesai" sebagai "napas terakhir"
                             print(f"Sending decommission confirmation for {SERVER_ID}...")
-                            # Kirim sinyal "napas terakhir" ke dashboard
                             requests.post(
                                 f"{DASHBOARD_API_URL}/agent/decommission-complete",
                                 json={"serverId": SERVER_ID},
                                 headers=headers,
                                 timeout=5
                             )
-                            print("Decommission signal sent successfully.")
+                            print("Decommission signal sent.")
+                        
                         except Exception as e:
                             print(f"Could not send decommission signal: {e}")
+                        
                         finally:
-                            # Jadwalkan penghapusan mandiri agar berjalan independen
+                            # LANGKAH 2: Jadwalkan penghapusan mandiri, tidak peduli sinyal berhasil atau tidak
                             print("Scheduling self-destruct script...")
                             app_name = os.getenv("PM2_APP_NAME", SERVER_ID)
-                            command = f"sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}"
-                            schedule_command = f'echo "{command}" | at now + 10 seconds'
-                            run(schedule_command, shell=True, check=True)
-                        # Jangan lapor balik, langsung lanjut ke iterasi berikutnya
-                        continue
+                            command = f"nohup sh -c 'sleep 10 && sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}' > /dev/null 2>&1 &"
+                            run(command, shell=True, check=True)
+                            
+                            # Hentikan agen untuk mencegah loop
+                            sys.exit(0)
 
                     if log_entry.action != "DECOMMISSION_AGENT":
                         await asyncio.to_thread(
