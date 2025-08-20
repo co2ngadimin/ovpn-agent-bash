@@ -872,7 +872,6 @@ SELF_DESTRUCT_EOF
     echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
     # --- AKHIR BLOK BARU ---
 }
-}
 
 # Buat file konfigurasi PM2 berdasarkan input user
 create_pm2_ecosystem_file() {
