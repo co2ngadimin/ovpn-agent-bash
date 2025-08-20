@@ -683,12 +683,24 @@ async def background_task_loop():
                         username = sanitize_username(log_entry.details)
                         run([SCRIPT_PATH, "revoke", username], check=True)
                         execution_result["message"] = f"User {username} revoked."
+                    elif log_entry.action == "DECOMMISSION_AGENT":
+                        # Panggil skrip penghapusan mandiri dan keluar
+                        # Nama aplikasi PM2 didapat dari nama file ecosystem
+                        # atau bisa juga diambil dari environment variable
+                        app_name = os.getenv("PM2_APP_NAME", SERVER_ID) # Gunakan SERVER_ID sebagai fallback
+                        
+                        run(["/bin/bash", f"{SCRIPT_DIR}/self-destruct.sh", app_name], check=True)
+                        
+                        # Setelah ini, skrip akan berhenti karena sudah dihapus
+                        # Tidak perlu melaporkan kembali ke dashboard
+                        execution_result["message"] = f"Decommission command executed for {app_name}."
 
-                    await asyncio.to_thread(
-                        requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
-                        json={"actionLogId": log_entry.id, "status": execution_result["status"], "message": execution_result["message"], "ovpnFileContent": execution_result["ovpnFileContent"]},
-                        headers=headers
-                    )
+                    if log_entry.action != "DECOMMISSION_AGENT":
+                        await asyncio.to_thread(
+                            requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
+                            json={"actionLogId": log_entry.id, "status": execution_result["status"], "message": execution_result["message"], "ovpnFileContent": execution_result["ovpnFileContent"]},
+                            headers=headers
+                        )
                 except Exception as e:
                     print(f"Error processing action log {action_log.get('id', 'N/A')}: {e}")
                     await asyncio.to_thread(
@@ -831,6 +843,35 @@ esac
 CLIENT_MANAGER_EOF
     chmod -v +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
     echo "✅ Skrip manajer klien berhasil di-deploy."
+    echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
+    cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
+#!/bin/bash
+# self-destruct.sh
+# Skrip ini akan menghentikan dan menghapus layanan PM2, 
+# lalu menghapus seluruh direktori instalasi agen.
+
+set -e # Keluar jika ada error
+
+PM2_APP_NAME="$1"
+AGENT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
+
+# Hentikan dan hapus dari PM2
+echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
+pm2 stop "$PM2_APP_NAME" || echo "Proses sudah berhenti."
+pm2 delete "$PM2_APP_NAME" || echo "Proses sudah dihapus."
+pm2 save --force
+
+echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
+rm -rf "$AGENT_DIR"
+
+echo "✅ Proses penghapusan mandiri agen selesai."
+SELF_DESTRUCT_EOF
+    chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
+    echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
+    # --- AKHIR BLOK BARU ---
+}
 }
 
 # Buat file konfigurasi PM2 berdasarkan input user
