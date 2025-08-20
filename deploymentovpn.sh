@@ -847,24 +847,25 @@ esac
 CLIENT_MANAGER_EOF
     chmod -v +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
     echo "✅ Skrip manajer klien berhasil di-deploy."
-    echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
-    cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
+echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
+cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
 #!/bin/bash
-# self-destruct.sh
-# Skrip ini akan menghentikan dan menghapus layanan PM2, 
-# lalu menghapus seluruh direktori instalasi agen.
+set -e
 
-set -e # Keluar jika ada error
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ Skrip ini harus dijalankan dengan sudo."
+    exit 1
+fi
 
 PM2_APP_NAME="$1"
-AGENT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+AGENT_DIR=\$( cd -- "$( dirname -- "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
 
-# Hentikan dan hapus dari PM2
 echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
-pm2 stop "$PM2_APP_NAME" || echo "Proses sudah berhenti."
-pm2 delete "$PM2_APP_NAME" || echo "Proses sudah dihapus."
+# --- PERBAIKAN: Hapus '|| echo ...' agar error bisa menghentikan skrip ---
+pm2 stop "$PM2_APP_NAME"
+pm2 delete "$PM2_APP_NAME"
 pm2 save --force
 
 echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
@@ -872,9 +873,8 @@ rm -rf "$AGENT_DIR"
 
 echo "✅ Proses penghapusan mandiri agen selesai."
 SELF_DESTRUCT_EOF
-    chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
-    echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
-    # --- AKHIR BLOK BARU ---
+chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
+echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
 }
 
 # Buat file konfigurasi PM2 berdasarkan input user
