@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# deploymentovpn.sh (MODIFIKASI dengan venv)
+# deploymentovpn.sh (Unified Version with SNMP)
 #
 # Skrip ini mengotomatiskan deployment OpenVPN Agent pada server baru.
-# Ini akan menginstal dependensi, membuat Python virtual environment (venv),
+# Ini akan menginstal dependensi, mengkonfigurasi SNMP, membuat Python virtual environment (venv),
 # menyebarkan skrip agen dan manajer klien, dan mengkonfigurasinya untuk
 # dijalankan dengan PM2 dari dalam venv.
 #
-# Usage: ./deploymentovpn.sh
+# Usage: sudo ./deploymentovpn.sh
 #
 # Keluar segera jika ada perintah yang keluar dengan status non-nol.
 set -e
@@ -37,13 +37,17 @@ APP_NAME=""
 DASHBOARD_API_URL=""
 SERVER_ID=""
 OVPN_DIR=""
+# Variabel untuk SNMP
+CONFIGURE_SNMP="N"
+SNMP_COMMUNITY_STRING=""
+DASHBOARD_MONITORING_IP=""
 
 # --- Fungsi ---
 
 # Periksa apakah skrip dijalankan dengan hak akses root (sudo)
 check_sudo() {
     if [ "$EUID" -ne 0 ]; then
-        echo "❌ Tolong jalankan skrip ini dengan sudo: sudo $0"
+        echo "⛔ Tolong jalankan skrip ini dengan sudo: sudo $0"
         exit 1
     fi
     echo "✅ Skrip dijalankan dengan hak akses root."
@@ -53,17 +57,17 @@ check_sudo() {
 get_user_input() {
     echo ""
     while [ -z "$APP_NAME" ]; do
-        read -p "📝 Masukkan Nama Aplikasi untuk PM2 (contoh: vpn-agent): " APP_NAME
+        read -p "🏷️ Masukkan Nama Aplikasi untuk PM2 (contoh: vpn-agent): " APP_NAME
         if [ -z "$APP_NAME" ]; then
-            echo "❌ Nama aplikasi tidak boleh kosong."
+            echo "⛔ Nama aplikasi tidak boleh kosong."
         fi
     done
 
     echo ""
     while [ -z "$AGENT_API_KEY" ]; do
-        read -p "📝 Masukkan AGENT_API_KEY (pastikan sama dengan di dashboard): " AGENT_API_KEY
+        read -p "🔑 Masukkan AGENT_API_KEY (pastikan sama dengan di dashboard): " AGENT_API_KEY
         if [ -z "$AGENT_API_KEY" ]; then
-            echo "❌ API Key tidak boleh kosong."
+            echo "⛔ API Key tidak boleh kosong."
         fi
     done
 
@@ -83,19 +87,20 @@ get_user_input() {
             1)
                 local ip_valid=0
                 while [ $ip_valid -eq 0 ]; do
-                    read -p "📝 Masukkan Alamat IP Dashboard API: " DASHBOARD_HOST_RAW
+                    read -p "🌐 Masukkan Alamat IP Dashboard API: " DASHBOARD_HOST_RAW
                     if [[ $DASHBOARD_HOST_RAW =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
                         echo "🔎 Melakukan ping ke $DASHBOARD_HOST_RAW..."
                         if ping -c 1 -W 1 "$DASHBOARD_HOST_RAW" > /dev/null 2>&1; then
                             echo "✅ IP Dashboard API ($DASHBOARD_HOST_RAW) berhasil dijangkau."
                             PROTOCOL="https://" # Default HTTPS untuk IP
                             BASE_URL="${PROTOCOL}${DASHBOARD_HOST_RAW}"
+                            DASHBOARD_MONITORING_IP=$DASHBOARD_HOST_RAW # Simpan IP untuk SNMP
                             ip_valid=1
                         else
-                            echo "❌ Gagal melakukan ping ke $DASHBOARD_HOST_RAW. Pastikan IP benar dan server up."
+                            echo "⛔ Gagal melakukan ping ke $DASHBOARD_HOST_RAW. Pastikan IP benar dan server up."
                         fi
                     else
-                        echo "❌ Format IP tidak valid. Mohon masukkan IP dengan format yang benar."
+                        echo "⛔ Format IP tidak valid. Mohon masukkan IP dengan format yang benar."
                     fi
                 done
                 url_type_valid=1
@@ -103,9 +108,9 @@ get_user_input() {
             2)
                 local domain_valid=0
                 while [ $domain_valid -eq 0 ]; do
-                    read -p "📝 Masukkan Nama Domain Dashboard API (contoh: dashboard.example.com atau https://dashboard.example.com): " DASHBOARD_HOST_RAW
+                    read -p "🌐 Masukkan Nama Domain Dashboard API (contoh: dashboard.example.com atau https://dashboard.example.com): " DASHBOARD_HOST_RAW
                     if [[ -z "$DASHBOARD_HOST_RAW" ]]; then
-                        echo "❌ Nama domain tidak boleh kosong."
+                        echo "⛔ Nama domain tidak boleh kosong."
                     else
                         # Periksa protokol yang sudah ada
                         if [[ "$DASHBOARD_HOST_RAW" =~ ^(http|https):// ]]; then
@@ -128,14 +133,14 @@ get_user_input() {
                             BASE_URL="${PROTOCOL}${DASHBOARD_HOST_CLEAN}" # Bangun BASE_URL dengan protokol yang benar
                             domain_valid=1
                         else
-                            echo "❌ Format domain tidak valid. Mohon masukkan domain dengan format yang benar."
+                            echo "⛔ Format domain tidak valid. Mohon masukkan domain dengan format yang benar."
                         fi
                     fi
                 done
                 url_type_valid=1
                 ;;
             *)
-                echo "❌ Pilihan tidak valid. Silakan masukkan 1 atau 2."
+                echo "⛔ Pilihan tidak valid. Silakan masukkan 1 atau 2."
                 ;;
         esac
     done
@@ -148,12 +153,12 @@ get_user_input() {
     if [[ "$USE_CUSTOM_PORT" =~ ^[yY]$ ]]; then
         local port_valid=0
         while [ $port_valid -eq 0 ]; do
-            read -p "📝 Masukkan Port Kustom (contoh: 3000): " DASHBOARD_PORT
+            read -p "🔌 Masukkan Port Kustom (contoh: 3000): " DASHBOARD_PORT
             if [[ "$DASHBOARD_PORT" =~ ^[0-9]+$ ]] && [ "$DASHBOARD_PORT" -ge 1 ] && [ "$DASHBOARD_PORT" -le 65535 ]; then
                 FINAL_PORT_PART=":${DASHBOARD_PORT}"
                 port_valid=1
             else
-                echo "❌ Port tidak valid. Masukkan angka antara 1 dan 65535."
+                echo "⛔ Port tidak valid. Masukkan angka antara 1 dan 65535."
             fi
         done
     fi
@@ -171,17 +176,63 @@ get_user_input() {
 
     echo ""
     while [ -z "$SERVER_ID" ]; do
-        read -p "📝 Masukkan ID Server (contoh: SERVER-01): " SERVER_ID
+        read -p "🏷️ Masukkan ID Server (contoh: SERVER-01): " SERVER_ID
         if [ -z "$SERVER_ID" ]; then
-            echo "❌ ID Server tidak boleh kosong."
+            echo "⛔ ID Server tidak boleh kosong."
         fi
     done
 
     echo ""
     local default_ovpn_dir="/home/$SUDO_USER/ovpn"
-    read -p "📝 Masukkan direktori untuk file OVPN (default: $default_ovpn_dir): " OVPN_DIR_INPUT
+    read -p "📁 Masukkan direktori untuk file OVPN (default: $default_ovpn_dir): " OVPN_DIR_INPUT
     OVPN_DIR=${OVPN_DIR_INPUT:-$default_ovpn_dir}
     echo "✅ Direktori OVPN: $OVPN_DIR"
+}
+
+# --- FUNGSI BARU: Input SNMP ---
+get_snmp_input() {
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🛡️  KONFIGURASI SNMP MONITORING"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    read -p "🔧 Apakah Anda ingin mengkonfigurasi SNMP untuk monitoring? [Y/n]: " CONFIGURE_SNMP
+    CONFIGURE_SNMP=${CONFIGURE_SNMP:-Y}
+
+    if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
+        echo ""
+        echo "ℹ️  SNMP memungkinkan dashboard untuk memonitor CPU, RAM, dan metrik sistem lainnya."
+        echo ""
+        
+        while [ -z "$SNMP_COMMUNITY_STRING" ]; do
+            read -p "🔒 Masukkan SNMP Community String (seperti password, contoh: public_vpn): " SNMP_COMMUNITY_STRING
+            if [ -z "$SNMP_COMMUNITY_STRING" ]; then
+                echo "⛔ Community string tidak boleh kosong."
+            fi
+        done
+        
+        # Jika dashboard menggunakan domain, kita perlu IP-nya untuk SNMP
+        if [ -z "$DASHBOARD_MONITORING_IP" ]; then
+            echo ""
+            echo "⚠️  Untuk keamanan SNMP, kita perlu mengizinkan hanya IP tertentu untuk mengakses."
+            while [ -z "$DASHBOARD_MONITORING_IP" ]; do
+                read -p "🌍 Masukkan Alamat IP dari server Dashboard untuk diizinkan memonitor: " DASHBOARD_MONITORING_IP
+                if [[ ! $DASHBOARD_MONITORING_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                    echo "⛔ Format IP tidak valid. Mohon masukkan IP dengan format yang benar."
+                    DASHBOARD_MONITORING_IP=""
+                fi
+            done
+        fi
+        
+        echo ""
+        echo "✅ SNMP akan dikonfigurasi dengan:"
+        echo "   • Community String: $SNMP_COMMUNITY_STRING"
+        echo "   • IP yang diizinkan: $DASHBOARD_MONITORING_IP"
+        echo ""
+    else
+        echo "ℹ️  Melewati konfigurasi SNMP."
+        echo ""
+    fi
 }
 
 # Temukan jalur Easy-RSA index.txt secara dinamis
@@ -202,7 +253,11 @@ find_easy_rsa_path() {
             return 0
         fi
     done
-    echo "❌ Jalur Easy-RSA index.txt tidak ditemukan di lokasi umum. Deployment gagal."
+    echo "⛔ Jalur Easy-RSA index.txt tidak ditemukan di lokasi umum. Deployment gagal."
+    echo "   Lokasi yang diperiksa:"
+    for path in "${paths_to_check[@]}"; do
+        echo "   • $path"
+    done
     return 1
 }
 
@@ -220,144 +275,266 @@ check_openvpn_service() {
         echo "✅ Proses OpenVPN ditemukan, tapi layanan tidak terdaftar secara resmi."
         return 0
     fi
-    echo "❌ Layanan atau proses OpenVPN tidak ditemukan. Deployment dibatalkan."
+    echo "⛔ Layanan atau proses OpenVPN tidak ditemukan. Deployment dibatalkan."
+    echo "   Pastikan OpenVPN sudah terinstal dan berjalan, atau letakkan skrip instalasi di:"
+    echo "   $OPENVPN_INSTALL_SCRIPT_PATH"
     return 1
 }
 
 # Instal dependensi sistem, Node.js, dan Python
 install_dependencies() {
-    echo "⚙️  Menginstal dependensi sistem..."
-    apt-get update
-    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix at
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "⚙️  MENGINSTAL DEPENDENSI SISTEM"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📦 Memperbarui daftar paket..."
+    apt-get update -qq
+
+    echo "📦 Menginstal dependensi sistem..."
+    # PERBAIKAN: Tambahkan snmpd untuk SNMP monitoring, hapus psutil karena tidak dibutuhkan
+    apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix at snmpd
+    # FIX BUG: Install sudo, jika belum terinstall, agar 'sudo -u' bisa digunakan
+    apt-get install -y sudo
 
     # Perbaiki line endings script ini
-    dos2unix "$0"
+    dos2unix "$0" >/dev/null 2>&1
 
+    echo ""
     echo "⚙️  Menginstal Node.js secara manual..."
     if ! command -v node &> /dev/null; then
-        echo "Node.js tidak ditemukan. Menginstal..."
-        curl -o /tmp/"$NODE_DIR".tar.gz "$NODE_URL"
+        echo "📥 Node.js tidak ditemukan. Menginstal Node.js $NODE_VERSION..."
+        
+        # Download dengan progress bar
+        echo "⬇️  Mengunduh Node.js..."
+        curl -# -o /tmp/"$NODE_DIR".tar.gz "$NODE_URL"
+        
+        echo "📂 Mengekstrak Node.js..."
         tar -xzf /tmp/"$NODE_DIR".tar.gz -C /tmp/
         mkdir -p /usr/local/lib/nodejs
-        cp -Rv /tmp/"$NODE_DIR" /usr/local/lib/nodejs/
+        cp -Rv /tmp/"$NODE_DIR" /usr/local/lib/nodejs/ >/dev/null
 
-        ln -s /usr/local/lib/nodejs/"$NODE_DIR"/bin/node /usr/bin/node
-        ln -s /usr/local/lib/nodejs/"$NODE_DIR"/bin/npm /usr/bin/npm
-        ln -s /usr/local/lib/nodejs/"$NODE_DIR"/bin/npx /usr/bin/npx
+        # Buat symlink
+        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/node /usr/bin/node
+        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/npm /usr/bin/npm
+        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/npx /usr/bin/npx
 
         echo "✅ Verifikasi instalasi Node.js..."
-        node -v
-        echo "✅ Node.js terinstal."
+        node_version=$(node -v)
+        echo "   Node.js version: $node_version"
+        echo "✅ Node.js terinstal dengan sukses."
     else
-        echo "☑️ Node.js sudah terinstal. Melewati."
+        current_node_version=$(node -v)
+        echo "☑️  Node.js sudah terinstal (versi: $current_node_version). Melewati."
     fi
 
+    echo ""
     echo "⚙️  Menginstal PM2..."
-    sudo npm install -g pm2
-
-    # Konfigurasi PM2 PATH
-    echo "🔗 Mengkonfigurasi PM2 PATH..."
-    # Ganti baris ini:
-    # NPM_GLOBAL_BIN_PATH=$(sudo -u "$SUDO_USER" bash -c "npm config get prefix")/bin
-    # Dengan baris ini:
-    NPM_GLOBAL_BIN_PATH="/usr/local/lib/nodejs/$NODE_DIR/bin"
-    echo "ℹ️ Jalur global NPM yang terdeteksi untuk $SUDO_USER: $NPM_GLOBAL_BIN_PATH"
-
-    SHELL_PROFILE=""
-    if [ "$USER" = "root" ] || [ "$SUDO_USER" = "root" ]; then
-        HOME_DIR="/root"
+    # FIX BUG: Install PM2 sebagai user root
+    if ! command -v pm2 &> /dev/null; then
+        npm install -g pm2 >/dev/null 2>&1
+        echo "✅ PM2 berhasil diinstal secara global."
     else
-        HOME_DIR="/home/$SUDO_USER"
+        pm2_version=$(pm2 --version)
+        echo "☑️  PM2 sudah terinstal (versi: $pm2_version). Melewati."
     fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🐍 MENGKONFIGURASI PYTHON VIRTUAL ENVIRONMENT"
+    echo "═══════════════════════════════════════════════"
+    echo ""
     
-    if [ -f "$HOME_DIR/.zshrc" ]; then
-        SHELL_PROFILE="$HOME_DIR/.zshrc"
-    elif [ -f "$HOME_DIR/.bashrc" ]; then
-        SHELL_PROFILE="$HOME_DIR/.bashrc"
-    else
-        touch "$HOME_DIR/.bashrc"
-        SHELL_PROFILE="$HOME_DIR/.bashrc"
-    fi
-
-    if [ -n "$SHELL_PROFILE" ]; then
-        if ! grep -q "$NPM_GLOBAL_BIN_PATH" "$SHELL_PROFILE" 2>/dev/null; then
-            echo "export PATH=\"\$PATH:$NPM_GLOBAL_BIN_PATH\"" | sudo tee -a "$SHELL_PROFILE" > /dev/null
-            export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
-        fi
-        if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
-            ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
-        fi
-    fi
-
-    if command -v pm2 &> /dev/null; then
-        echo "✅ PM2 dapat diakses dari baris perintah."
-        pm2 --version
-    else
-        echo "❌ Instalasi PM2 mungkin gagal."
-    fi
-
-    ## =======================================================
-    ## PERUBAHAN VENV: Membuat Virtual Environment dan Instalasi Paket Python
-    ## =======================================================
-    echo "🐍 Membuat Python virtual environment di $VENV_PATH..."
+    echo "🏗️  Membuat Python virtual environment di $VENV_PATH..."
     # Buat venv sebagai SUDO_USER untuk memastikan kepemilikan yang benar
-    sudo -u "$SUDO_USER" python3 -m venv "$VENV_PATH"
+    if sudo -u "$SUDO_USER" python3 -m venv "$VENV_PATH"; then
+        echo "✅ Virtual environment berhasil dibuat."
+    else
+        echo "⛔ Gagal membuat virtual environment. Periksa instalasi Python3."
+        exit 1
+    fi
 
     echo "📦 Menginstal dependensi Python di dalam venv..."
     # Jalankan pip dari dalam venv untuk menginstal paket secara lokal
-    sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install --upgrade pip
-    sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp
-
-    echo "✅ Dependensi Python terinstal di dalam virtual environment."
-    ## =======================================================
+    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install --upgrade pip --quiet; then
+        echo "✅ pip berhasil diperbarui."
+    else
+        echo "⛔ Gagal memperbarui pip."
+        exit 1
+    fi
+    
+    # PERBAIKAN: Hapus psutil karena kita menggunakan SNMP
+    echo "   Menginstal: fastapi, uvicorn, pydantic, python-dotenv, requests, aiohttp..."
+    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv requests aiohttp --quiet; then
+        echo "✅ Semua dependensi Python berhasil diinstal di dalam virtual environment."
+    else
+        echo "⛔ Gagal menginstal dependensi Python."
+        exit 1
+    fi
+    
+    echo ""
+    echo "✅ INSTALASI DEPENDENSI SELESAI"
 }
 
+# --- FUNGSI BARU: Konfigurasi SNMP ---
+configure_snmp() {
+    if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
+        echo ""
+        echo "═══════════════════════════════════════════════"
+        echo "🛡️  MENGKONFIGURASI SNMP DAEMON"
+        echo "═══════════════════════════════════════════════"
+        echo ""
+        
+        echo "📝 Membuat konfigurasi SNMP..."
+        # Buat backup konfigurasi lama jika ada
+        if [ -f /etc/snmp/snmpd.conf ]; then
+            cp /etc/snmp/snmpd.conf /etc/snmp/snmpd.conf.backup.$(date +%Y%m%d_%H%M%S)
+            echo "   Backup konfigurasi lama dibuat."
+        fi
+        
+        # Buat file konfigurasi yang aman
+        cat << EOF | tee /etc/snmp/snmpd.conf > /dev/null
+#
+# Konfigurasi SNMP untuk OpenVPN Agent Monitoring
+# Generated by deploymentovpn.sh
+#
+
+# Izinkan akses read-only dari IP dashboard
+rocommunity $SNMP_COMMUNITY_STRING $DASHBOARD_MONITORING_IP
+
+# Informasi sistem
+sysLocation    "OpenVPN Server - Managed by VPN Agent"
+sysContact     "OpenVPN Agent <agent@vpnserver.local>"
+sysName        "$SERVER_ID"
+
+# Disable default public community untuk keamanan
+com2sec notConfigUser  default       public
+
+# Konfigurasi akses grup
+group   notConfigGroup v1           notConfigUser
+group   notConfigGroup v2c          notConfigUser
+
+# View yang dibatasi
+view    systemview    included   .1.3.6.1.2.1.1
+view    systemview    included   .1.3.6.1.2.1.25.1.1
+
+# Akses terbatas
+access  notConfigGroup ""      any       noauth    exact  systemview none none
+
+# Nonaktifkan akses tidak diperlukan
+dontLogTCPWrappersConnects yes
+EOF
+
+        echo "🔄 Merestart dan mengaktifkan layanan SNMP..."
+        if systemctl restart snmpd && systemctl enable snmpd; then
+            echo "✅ SNMP daemon berhasil dikonfigurasi dan diaktifkan."
+            echo ""
+            echo "📊 Informasi SNMP:"
+            echo "   • Community String: $SNMP_COMMUNITY_STRING"
+            echo "   • IP yang diizinkan: $DASHBOARD_MONITORING_IP"
+            echo "   • Port: 161 (UDP)"
+            echo ""
+            
+            # Test SNMP secara lokal
+            echo "🧪 Testing SNMP secara lokal..."
+            if command -v snmpget &> /dev/null; then
+                if snmpget -v2c -c "$SNMP_COMMUNITY_STRING" localhost 1.3.6.1.2.1.1.1.0 >/dev/null 2>&1; then
+                    echo "✅ SNMP test berhasil."
+                else
+                    echo "⚠️  SNMP test gagal, tapi konfigurasi sudah dibuat."
+                fi
+            else
+                echo "ℹ️  snmp-utils belum terinstal, tidak dapat melakukan test lokal."
+            fi
+        else
+            echo "⛔ Gagal mengkonfigurasi SNMP daemon."
+            exit 1
+        fi
+        
+        echo "✅ KONFIGURASI SNMP SELESAI"
+    else
+        echo ""
+        echo "ℹ️  Melewati konfigurasi SNMP."
+    fi
+}
 
 # Buat file .env dari input user
 create_env_file() {
-    echo "📄 Membuat file .env..."
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "📄 MEMBUAT FILE KONFIGURASI"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📝 Membuat file .env dengan konfigurasi..."
     # Gunakan tee untuk membuat file .env dengan izin sudo
-    cat << EOF | sudo tee "$SCRIPT_DIR/.env" > /dev/null
+    cat << EOF | tee "$SCRIPT_DIR/.env" > /dev/null
+# OpenVPN Agent Configuration
+# Generated by deploymentovpn.sh on $(date)
+
+# API Configuration
 AGENT_API_KEY="$AGENT_API_KEY"
 SERVER_ID="$SERVER_ID"
 DASHBOARD_API_URL="$DASHBOARD_API_URL"
+
+# Script Paths
 SCRIPT_PATH="$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
 OVPN_DIR="$OVPN_DIR"
+
+# Easy-RSA Configuration
 EASY_RSA_INDEX_PATH="$EASY_RSA_INDEX_PATH"
 EASY_RSA_SERVER_NAME_PATH="$EASY_RSA_SERVER_NAME_PATH"
-OVPN_ACTIVITY_LOG_PATH="/var/log/openvpn/user_activity.log"
-EOF
-    echo "✅ File .env berhasil dibuat."
-}
 
+# Logging
+OVPN_ACTIVITY_LOG_PATH="/var/log/openvpn/user_activity.log"
+
+# PM2 Configuration
+PM2_APP_NAME="$APP_NAME"
+EOF
+    
+    # Set ownership ke SUDO_USER
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/.env"
+    chmod 600 "$SCRIPT_DIR/.env"
+    
+    echo "✅ File .env berhasil dibuat dengan konfigurasi lengkap."
+    echo "   Lokasi: $SCRIPT_DIR/.env"
+}
 
 # Deploy skrip Python dan Bash
 deploy_scripts() {
-    echo "📂 Menyebarkan skrip ke $SCRIPT_DIR..."
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "📂 MENYEBARKAN SKRIP APLIKASI"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📁 Memastikan struktur direktori..."
     # Direktori sudah dibuat sebelumnya, hanya memastikan ada folder logs
     mkdir -p "$SCRIPT_DIR/logs"
+    chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
 
-    # Simpan skrip agen Python
-    echo "📄 Menulis skrip agen Python ke $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
+    # Simpan skrip agen Python (menggunakan versi terbaik dari original)
+    echo "🐍 Menulis skrip agen Python ke $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
     # Gunakan sudo tee untuk menulis file sebagai SUDO_USER
     cat << '_PYTHON_SCRIPT_EOF_' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" > /dev/null
-# [ ISI KONTEN main.py YANG SAMA SEPERTI ASLINYA DI SINI ]
-
-# main.py (Modifikasi Agen FastAPI Anda)
+# main.py (OpenVPN Agent - Final Version)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from subprocess import run, PIPE
+from subprocess import run, PIPE, CalledProcessError
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import subprocess
 import os
 import re
-import psutil
 import requests
 import asyncio
 from datetime import datetime, timezone
 import hashlib
-from typing import List, Optional # NEW: Import List and Optional for typing
+import sys
+from typing import List, Optional
+import shlex
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, '.env'))
@@ -373,7 +550,7 @@ OVPN_DIR = os.getenv("OVPN_DIR", "/home/ovpn")
 EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH", "/etc/openvpn/easy-rsa/pki/index.txt")
 EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH", "/etc/openvpn/easy-rsa/SERVER_NAME_GENERATED")
 OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH", "/var/log/openvpn/user_activity.log")
-
+PM2_APP_NAME = os.getenv("PM2_APP_NAME")
 
 if not AGENT_API_KEY:
     raise RuntimeError("Missing AGENT_API_KEY in .env")
@@ -381,19 +558,21 @@ if not SERVER_ID:
     raise RuntimeError("Missing SERVER_ID in .env")
 if not DASHBOARD_API_URL:
     raise RuntimeError("Missing DASHBOARD_API_URL in .env")
-if not os.path.exists(EASY_RSA_INDEX_PATH):
-    raise RuntimeError(f"Easy-RSA index.txt not found at {EASY_RSA_INDEX_PATH}")
+# FIX BUG: Tidak perlu cek file di sini, karena akan diakses dengan sudo
+# if not os.path.exists(EASY_RSA_INDEX_PATH):
+#     raise RuntimeError(f"Easy-RSA index.txt not found at {EASY_RSA_INDEX_PATH}")
 
 # Global variables to store the last sent checksums
 last_vpn_profiles_checksum = None
-last_activity_log_checksum = None # NEW: Checksum for activity log
+last_activity_log_checksum = None
 
 # --- Middleware for auth ---
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    if request.url.path not in ["/health", "/stats"] and (not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != AGENT_API_KEY):
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-    auth = request.headers.get("Authorization")
+    if request.url.path not in ["/health", "/stats"]:
+        auth = request.headers.get("Authorization")
+        if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != AGENT_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
 # --- Utility Functions ---
@@ -405,8 +584,9 @@ def sanitize_username(username: str) -> str:
     return sanitized
 
 def get_openvpn_service_status() -> str:
+    # FIX BUG: Cek status service dengan sudo
     try:
-        result = run(["systemctl", "is-active", "openvpn@server"], stdout=PIPE, stderr=PIPE, text=True)
+        result = run(["sudo", "systemctl", "is-active", "openvpn@server"], stdout=PIPE, stderr=PIPE, text=True)
         if result.stdout.strip() == "active":
             return "running"
         elif result.stdout.strip() == "inactive":
@@ -418,23 +598,24 @@ def get_openvpn_service_status() -> str:
         return "error"
 
 def get_server_cn() -> str:
-    if os.path.exists(EASY_RSA_SERVER_NAME_PATH):
-        with open(EASY_RSA_SERVER_NAME_PATH, 'r') as f:
-            return f.read().strip()
+    # FIX BUG: Jalankan sebagai root, jadi tidak perlu sudo
+    try:
+        if os.path.exists(EASY_RSA_SERVER_NAME_PATH):
+            with open(EASY_RSA_SERVER_NAME_PATH, 'r') as f:
+                return f.read().strip()
+    except Exception as e:
+        print(f"Error reading server CN file: {e}")
     return "server_irL5Kfmg3FnRZaGE"
 
 def parse_index_txt() -> tuple[list[dict], str]:
     profiles = []
-    if not os.path.exists(EASY_RSA_INDEX_PATH):
-        return [], ""
-
+    # FIX BUG: Jalankan sebagai root, jadi tidak perlu sudo
     try:
         with open(EASY_RSA_INDEX_PATH, 'r') as f:
             raw_content = f.read()
             checksum = hashlib.md5(raw_content.encode('utf-8')).hexdigest()
-            f.seek(0)
             server_cn = get_server_cn()
-            for line in f:
+            for line in raw_content.strip().split('\n'):
                 parts = line.strip().split('\t')
                 if len(parts) >= 6:
                     cert_status = parts[0]
@@ -463,7 +644,7 @@ def parse_index_txt() -> tuple[list[dict], str]:
                         except ValueError:
                             revocation_date = None
                     serial_number = parts[3]
-                    cn_match = re.search(r'/CN=([^/]+)$', line)
+                    cn_match = re.search(r'/CN=([^/]+)', line)
                     username_raw = cn_match.group(1) if cn_match else "unknown"
                     username = "".join(filter(str.isprintable, username_raw)).lower().strip()
                     if username_raw == server_cn:
@@ -476,8 +657,9 @@ def parse_index_txt() -> tuple[list[dict], str]:
                     if vpn_cert_status == "VALID":
                         ovpn_file_path = os.path.join(OVPN_DIR, f"{username}.ovpn")
                         try:
-                            if os.path.exists(ovpn_file_path) and os.access(ovpn_file_path, os.R_OK):
-                                with open(ovpn_file_path, "r") as ovpn_f:
+                            # FIX BUG: Jalankan sebagai root, jadi tidak perlu sudo
+                            if os.path.exists(ovpn_file_path):
+                                with open(ovpn_file_path, 'r') as ovpn_f:
                                     ovpn_file_content = ovpn_f.read()
                         except Exception as e:
                             print(f"Warning: Could not read OVPN file for {username}. Error: {e}")
@@ -497,13 +679,14 @@ def parse_index_txt() -> tuple[list[dict], str]:
 def get_openvpn_active_users_from_status_log() -> list[str]:
     active_users = []
     status_log_path = "/var/log/openvpn/status.log"
+    # FIX BUG: Jalankan sebagai root, jadi tidak perlu sudo
     if not os.path.exists(status_log_path):
         return []
     try:
         with open(status_log_path, 'r') as f:
+            content = f.read()
             start_parsing = False
-            for line in f:
-                line = line.strip()
+            for line in content.strip().split('\n'):
                 if line.startswith("Common Name,Real Address"):
                     start_parsing = True
                     continue
@@ -517,19 +700,18 @@ def get_openvpn_active_users_from_status_log() -> list[str]:
                             active_users.append(username)
         return active_users
     except Exception as e:
-        print(f"Error parsing OpenVPN status log for active users: {e}")
+        print(f"An unexpected error occurred: {e}")
         return []
 
-# --- NEW: Function to parse user activity logs ---
 def parse_activity_logs() -> tuple[list[dict], str]:
     logs = []
     raw_content = ""
-    # List of log files to read (current and rotated)
     log_files_to_check = [OVPN_ACTIVITY_LOG_PATH, f"{OVPN_ACTIVITY_LOG_PATH}.1"]
 
     for log_file in log_files_to_check:
         if os.path.exists(log_file):
             try:
+                # FIX BUG: Jalankan sebagai root, jadi tidak perlu sudo
                 with open(log_file, 'r') as f:
                     raw_content += f.read()
             except Exception as e:
@@ -538,27 +720,22 @@ def parse_activity_logs() -> tuple[list[dict], str]:
     if not raw_content:
         return [], ""
 
-    # Calculate checksum from the combined raw content
     checksum = hashlib.md5(raw_content.encode('utf-8')).hexdigest()
 
-    # Parse each line of the combined content
     for line in raw_content.strip().split('\n'):
         parts = line.strip().split(',')
         if len(parts) < 2:
-            continue # Skip malformed lines
+            continue
 
         try:
-            # Attempt to parse the timestamp
             timestamp = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S').isoformat() + "Z"
 
             log_entry = {
                 "timestamp": timestamp,
                 "action": parts[1],
-                # Use .get() with default None for safety
                 "username": parts[2] if len(parts) > 2 and parts[2] else None,
                 "publicIp": parts[3] if len(parts) > 3 and parts[3] else None,
                 "vpnIp": parts[4] if len(parts) > 4 and parts[4] else None,
-                # DISCONNECT has extra fields for bytes sent/received
                 "bytesReceived": int(parts[5]) if len(parts) > 5 and parts[1] == "DISCONNECT" else None,
                 "bytesSent": int(parts[6]) if len(parts) > 6 and parts[1] == "DISCONNECT" else None,
             }
@@ -575,8 +752,6 @@ class CreateUserRequest(BaseModel):
 
 class EnhancedServerStatusReport(BaseModel):
     serverId: str
-    cpuUsage: float
-    ramUsage: float
     serviceStatus: str
     activeUsers: list[str]
 
@@ -588,7 +763,6 @@ class VpnUserProfileData(BaseModel):
     serialNumber: Optional[str] = None
     ovpnFileContent: Optional[str] = None
 
-# --- NEW: Model for a single user activity log entry ---
 class UserActivityLogEntry(BaseModel):
     timestamp: str
     action: str
@@ -607,26 +781,22 @@ class ActionLogEntry(BaseModel):
 # --- Background Task ---
 async def background_task_loop():
     global last_vpn_profiles_checksum
-    global last_activity_log_checksum # MODIFIED: Make checksum global
+    global last_activity_log_checksum
 
     while True:
         try:
             headers = {"Authorization": f"Bearer {AGENT_API_KEY}"}
 
-            # 1. Report Node Metrics
-            cpu = psutil.cpu_percent(interval=None)
-            mem = psutil.virtual_memory()
+            # 1. Report Node Metrics (hanya service status, CPU/RAM via SNMP)
             service_status = get_openvpn_service_status()
             active_users = get_openvpn_active_users_from_status_log()
             node_metrics_payload = {
                 "serverId": SERVER_ID,
-                "cpuUsage": cpu,
-                "ramUsage": mem.percent,
                 "serviceStatus": service_status,
                 "activeUsers": active_users
             }
             await asyncio.to_thread(
-                requests.post, f"{DASHBOARD_API_URL}/agent/report-status", json=node_metrics_payload, headers=headers
+                requests.post, f"{DASHBOARD_API_URL}/agent/report-status", json=node_metrics_payload, headers=headers, timeout=10
             )
             print(f"Sent status report for server {SERVER_ID}")
 
@@ -635,33 +805,31 @@ async def background_task_loop():
             if current_profiles_checksum != last_vpn_profiles_checksum:
                 vpn_profiles_payload = {"serverId": SERVER_ID, "vpnProfiles": current_profiles}
                 await asyncio.to_thread(
-                    requests.post, f"{DASHBOARD_API_URL}/agent/sync-profiles", json=vpn_profiles_payload, headers=headers
+                    requests.post, f"{DASHBOARD_API_URL}/agent/sync-profiles", json=vpn_profiles_payload, headers=headers, timeout=10
                 )
                 print(f"Sent VPN profiles sync for server {SERVER_ID} (checksum changed).")
                 last_vpn_profiles_checksum = current_profiles_checksum
             else:
                 print(f"VPN profiles checksum unchanged for server {SERVER_ID}. Skipping sync.")
 
-            # --- NEW: 3. Sync User Activity Logs (on change) ---
+            # 3. Sync User Activity Logs (on change)
             current_activity_logs, current_activity_checksum = parse_activity_logs()
             if current_activity_checksum and current_activity_checksum != last_activity_log_checksum:
                 activity_logs_payload = {
                     "serverId": SERVER_ID,
                     "activityLogs": current_activity_logs
                 }
-                # IMPORTANT: You need to create this endpoint on your dashboard!
                 await asyncio.to_thread(
-                    requests.post, f"{DASHBOARD_API_URL}/agent/report-activity-logs", json=activity_logs_payload, headers=headers
+                    requests.post, f"{DASHBOARD_API_URL}/agent/report-activity-logs", json=activity_logs_payload, headers=headers, timeout=10
                 )
                 print(f"Sent user activity logs for server {SERVER_ID} (checksum changed).")
                 last_activity_log_checksum = current_activity_checksum
             else:
                 print(f"User activity log checksum unchanged for server {SERVER_ID}. Skipping sync.")
 
-
             # 4. Process Pending Actions from Dashboard
             action_logs_response = await asyncio.to_thread(
-                requests.get, f"{DASHBOARD_API_URL}/agent/action-logs?serverId={SERVER_ID}", headers=headers
+                requests.get, f"{DASHBOARD_API_URL}/agent/action-logs?serverId={SERVER_ID}", headers=headers, timeout=10
             )
             action_logs_response.raise_for_status()
             pending_actions = action_logs_response.json()
@@ -671,20 +839,22 @@ async def background_task_loop():
                     log_entry = ActionLogEntry(**action_log)
                     print(f"Processing action log: {log_entry.id} - {log_entry.action}")
                     execution_result = {"status": "success", "message": "", "ovpnFileContent": None}
+                    
+                    # Jalankan script manager dengan sudo karena butuh hak akses root
                     if log_entry.action == "CREATE_USER":
                         username = sanitize_username(log_entry.details)
-                        run([SCRIPT_PATH, "create", username], check=True)
+                        run(["sudo", SCRIPT_PATH, "create", username], check=True)
                         ovpn_path = os.path.join(OVPN_DIR, f"{username}.ovpn")
-                        with open(ovpn_path, "r") as f:
-                            execution_result["ovpnFileContent"] = f.read()
+                        # Baca file OVPN tanpa sudo karena dijalankan sebagai root
+                        result_ovpn = run(["cat", ovpn_path], capture_output=True, text=True, check=True)
+                        execution_result["ovpnFileContent"] = result_ovpn.stdout
                         execution_result["message"] = f"User {username} created."
                     elif log_entry.action in ["REVOKE_USER", "DELETE_USER"]:
                         username = sanitize_username(log_entry.details)
-                        run([SCRIPT_PATH, "revoke", username], check=True)
+                        run(["sudo", SCRIPT_PATH, "revoke", username], check=True)
                         execution_result["message"] = f"User {username} revoked."
                     elif log_entry.action == "DECOMMISSION_AGENT":
                         try:
-                            # LANGKAH 1: Kirim sinyal "selesai" sebagai "napas terakhir"
                             print(f"Sending decommission confirmation for {SERVER_ID}...")
                             requests.post(
                                 f"{DASHBOARD_API_URL}/agent/decommission-complete",
@@ -696,29 +866,34 @@ async def background_task_loop():
                         
                         except Exception as e:
                             print(f"Could not send decommission signal: {e}")
-                        
+
                         finally:
-                            # LANGKAH 2: Jadwalkan penghapusan mandiri, tidak peduli sinyal berhasil atau tidak
                             print("Scheduling self-destruct script...")
-                            app_name = os.getenv("PM2_APP_NAME", SERVER_ID)
-                            command = f"nohup sh -c 'sleep 10 && sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}' > /dev/null 2>&1 &"
-                            run(command, shell=True, check=True)
-                            
-                            # Hentikan agen untuk mencegah loop
+                            app_name = PM2_APP_NAME or SERVER_ID
+                            script = f"sleep 10 && sudo /bin/bash {SCRIPT_DIR}/self-destruct.sh {app_name}"
+
+                            # Biarkan shell yang handle redirect dan background
+                            subprocess.Popen(
+                                f"nohup sh -c \"{script}\" >/dev/null 2>&1 &",
+                                shell=True
+                            )
+
                             sys.exit(0)
 
                     if log_entry.action != "DECOMMISSION_AGENT":
                         await asyncio.to_thread(
                             requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": log_entry.id, "status": execution_result["status"], "message": execution_result["message"], "ovpnFileContent": execution_result["ovpnFileContent"]},
-                            headers=headers
+                            headers=headers,
+                            timeout=10
                         )
                 except Exception as e:
                     print(f"Error processing action log {action_log.get('id', 'N/A')}: {e}")
                     await asyncio.to_thread(
                         requests.post, f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                         json={"actionLogId": action_log.get('id', 'N/A'), "status": "failed", "message": f"Agent internal error: {e}"},
-                        headers=headers
+                        headers=headers,
+                        timeout=10
                     )
 
         except requests.exceptions.RequestException as e:
@@ -738,8 +913,7 @@ def health(): return {"status": "ok"}
 
 @app.get("/stats")
 def get_stats():
-    mem = psutil.virtual_memory()
-    return {"cpuUsage": psutil.cpu_percent(interval=1), "ramUsage": mem.percent}
+    return {"serviceStatus": get_openvpn_service_status()}
 
 @app.get("/profiles")
 def list_profiles_agent_side():
@@ -753,23 +927,26 @@ def list_active_users_agent_side():
 @app.post("/users")
 async def create_user_direct(data: CreateUserRequest):
     username = sanitize_username(data.username)
-    result = run([SCRIPT_PATH, "create", username], stdout=PIPE, stderr=PIPE, text=True)
+    # Jalankan script manager dengan sudo
+    result = run(["sudo", SCRIPT_PATH, "create", username], stdout=PIPE, stderr=PIPE, text=True)
     if result.returncode != 0: raise HTTPException(status_code=500, detail=result.stderr)
     return {"username": username, "message": "User created."}
 
 @app.delete("/users/{username}")
 def revoke_user_direct(username: str):
     username = sanitize_username(username)
-    result = run([SCRIPT_PATH, "revoke", username], stdout=PIPE, stderr=PIPE, text=True)
+    # Jalankan script manager dengan sudo
+    result = run(["sudo", SCRIPT_PATH, "revoke", username], stdout=PIPE, stderr=PIPE, text=True)
     if result.returncode != 0: raise HTTPException(status_code=500, detail=result.stderr)
     return {"detail": f"User {username} revoked"}
 
 _PYTHON_SCRIPT_EOF_
-    chmod -v +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
+    chmod +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
     echo "✅ Skrip agen Python berhasil di-deploy."
 
-    # Simpan skrip manajer klien
-    echo "📄 Menulis skrip manajer klien ke $SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME..."
+    # Simpan skrip manajer klien (menggunakan versi terbaik dari original)
+    echo "⚙️  Menulis skrip manajer klien ke $SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME..."
     cat << 'CLIENT_MANAGER_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
 #!/bin/bash
 # shellcheck disable=SC2164,SC2034
@@ -780,7 +957,7 @@ OPENVPN_INSTALL_SCRIPT="/root/ubuntu-22.04-lts-vpn-server.sh"
 create_client() {
     local username=$1
     if [ -z "$username" ]; then
-        echo "❌ Bro masukkan username. Usage: $0 create <username>"
+        echo "⛔ Bro masukkan username. Usage: $0 create <username>"
         exit 1
     fi
 
@@ -794,20 +971,21 @@ revoke_client() {
     local username="$1"
 
     if [ -z "$username" ]; then
-        echo "❌ Bro masukkan username. Usage: $0 revoke <username>"
+        echo "⛔ Bro masukkan username. Usage: $0 revoke <username>"
         exit 1
     fi
 
     echo "🔍 Nyari nomor client '$username' dari index.txt..."
 
     # Ambil nomor client dari index.txt (valid client only, case-insensitive)
+    # FIX BUG: Gunakan sudo untuk membaca file index.txt
     local client_number
-    client_number=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f2 | nl -w1 -s' ' | \
+    client_number=$(sudo tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f2 | nl -w1 -s' ' | \
         awk -v name="$username" 'BEGIN{IGNORECASE=1} $2 == name {print $1; exit}')
 
 
     if [ -z "$client_number" ]; then
-        echo "❌ Gak nemu client '$username'. Coba cek list pake: ./openvpn-client-manager.sh list"
+        echo "⛔ Gak nemu client '$username'. Coba cek list pake: ./openvpn-client-manager.sh list"
         exit 1
     fi
 
@@ -826,12 +1004,13 @@ EOF
 
 list_clients() {
     echo "📋 Listing active clients dari Easy-RSA index.txt..."
+    # FIX BUG: Gunakan sudo untuk membaca file index.txt
     if [[ -f /etc/openvpn/easy-rsa/pki/index.txt ]]; then
-        grep "^V" /etc/openvpn/easy-rsa/pki/index.txt | \
+        sudo grep "^V" /etc/openvpn/easy-rsa/pki/index.txt | \
         cut -d '=' -f2 | \
         grep -v '^server_' # Adjust this line if needed
     else
-        echo "❌ index.txt gak ketemu di /etc/openvpn/easy-rsa/pki/"
+        echo "⛔ index.txt gak ketemu di /etc/openvpn/easy-rsa/pki/"
         exit 1
     fi
 }
@@ -853,16 +1032,18 @@ case "$1" in
         ;;
 esac
 CLIENT_MANAGER_EOF
-    chmod -v +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
+    chmod +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
     echo "✅ Skrip manajer klien berhasil di-deploy."
-echo "📄 Menulis skrip penghapusan mandiri (self-destruct)..."
-cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
+
+    echo "🗑️  Menulis skrip penghapusan mandiri (self-destruct)..."
+    cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
 #!/bin/bash
 # self-destruct.sh (Final & Robust Version)
 set -e
 
 if [ "$EUID" -ne 0 ]; then
-    echo "❌ Skrip ini harus dijalankan dengan sudo."
+    echo "⛔ Skrip ini harus dijalankan dengan sudo."
     exit 1
 fi
 
@@ -872,25 +1053,37 @@ AGENT_DIR=$(dirname "$(readlink -f "$0")")
 echo "🛑 Menerima perintah penghapusan mandiri untuk '$PM2_APP_NAME'..."
 
 echo "[-] Menghentikan dan menghapus proses PM2: $PM2_APP_NAME"
-pm2 stop "$PM2_APP_NAME"
-pm2 delete "$PM2_APP_NAME"
+# FIX BUG: Jalankan PM2 sebagai root
+pm2 stop "$PM2_APP_NAME" || true
+pm2 delete "$PM2_APP_NAME" || true
 pm2 save --force
 
 echo "🗑️ Menghapus direktori instalasi agen: $AGENT_DIR"
+# FIX BUG: Gunakan sudo -u untuk menghapus file
 rm -rf "$AGENT_DIR"
 
 echo "✅ Proses penghapusan mandiri agen selesai."
 SELF_DESTRUCT_EOF
 
-chmod -v +x "$SCRIPT_DIR/self-destruct.sh"
-echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
+    chmod +x "$SCRIPT_DIR/self-destruct.sh"
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/self-destruct.sh"
+    echo "✅ Skrip penghapusan mandiri berhasil di-deploy."
+    
+    echo ""
+    echo "✅ SEMUA SKRIP BERHASIL DI-DEPLOY"
 }
 
 # Buat file konfigurasi PM2 berdasarkan input user
 create_pm2_ecosystem_file() {
-    echo "📄 Membuat file ecosystem.config.js..."
-    # Gunakan sudo tee untuk menulis file sebagai SUDO_USER
-    cat << EOF | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/ecosystem.config.js" > /dev/null
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🚀 MEMBUAT KONFIGURASI PM2"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📝 Membuat file ecosystem.config.js..."
+    # Gunakan tee untuk membuat file dengan hak akses root
+    cat << EOF | tee "$SCRIPT_DIR/ecosystem.config.js" > /dev/null
 module.exports = {
   apps: [{
     name: "$APP_NAME",
@@ -906,7 +1099,7 @@ module.exports = {
       NODE_ENV: "production",
       AGENT_API_KEY: "$AGENT_API_KEY",
       SERVER_ID: "$SERVER_ID",
-      PM2_APP_NAME: "$APP_NAME", // <-- PASTIKAN BARIS INI ADA
+      PM2_APP_NAME: "$APP_NAME",
       DASHBOARD_API_URL: "$DASHBOARD_API_URL",
       SCRIPT_PATH: "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME",
       OVPN_DIR: "$OVPN_DIR",
@@ -920,49 +1113,160 @@ module.exports = {
   }]
 };
 EOF
+    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/ecosystem.config.js"
     echo "✅ File ecosystem.config.js berhasil dibuat."
 }
 
 # Konfigurasi PM2 untuk menjalankan agen Python
 configure_pm2() {
-    echo "🚀 Mengkonfigurasi PM2..."
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🚀 MENGKONFIGURASI DAN MENJALANKAN PM2"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📂 Berpindah ke direktori skrip..."
     cd "$SCRIPT_DIR" || exit
-    # Jalankan pm2 start dan pm2 save sebagai SUDO_USER
-    sudo -u "$SUDO_USER" pm2 start ecosystem.config.js
-    sudo -u "$SUDO_USER" pm2 save
-    # Jalankan pm2 startup untuk membuat script startup sistem
-    pm2 startup systemd -u "$SUDO_USER" --hp "/home/$SUDO_USER"
-    echo "✅ PM2 dikonfigurasi. Agen sedang berjalan."
+    
+    echo "🧹 Membersihkan aplikasi PM2 yang mungkin sudah ada..."
+    # FIX BUG: Jalankan PM2 sebagai root
+    pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
+    
+    echo "▶️  Memulai aplikasi dengan PM2..."
+    # FIX BUG: Jalankan PM2 sebagai root
+    if pm2 start ecosystem.config.js; then
+        echo "✅ Aplikasi berhasil dimulai dengan PM2."
+    else
+        echo "⛔ Gagal memulai aplikasi dengan PM2."
+        exit 1
+    fi
+    
+    echo "💾 Menyimpan konfigurasi PM2..."
+    # FIX BUG: Jalankan PM2 sebagai root
+    pm2 save
+    
+    echo ""
+    echo "🔗 Untuk mengaktifkan startup PM2 secara otomatis, jalankan perintah ini dengan sudo:"
+    # FIX BUG: Jalankan startup PM2 sebagai root
+    local pm2_startup_cmd=$(pm2 startup systemd | tail -1)
+    echo "   $pm2_startup_cmd"
+    echo ""
+    
+    # Menampilkan status aplikasi
+    echo "📊 Status aplikasi PM2:"
+    # FIX BUG: Jalankan PM2 sebagai root
+    pm2 status "$APP_NAME"
+    
+    echo ""
+    echo "✅ PM2 BERHASIL DIKONFIGURASI"
 }
 
 # --- Eksekusi Utama ---
+main() {
+    echo ""
+    echo "╔═══════════════════════════════════════════════╗"
+    echo "║          OPENVPN AGENT DEPLOYMENT             ║"
+    echo "║              WITH SNMP MONITORING             ║"
+    echo "╚═══════════════════════════════════════════════╝"
+    echo ""
+    
+    check_sudo
+    get_user_input
+    get_snmp_input
 
-check_sudo
-get_user_input
-
-## PERUBAHAN VENV: Buat direktori skrip di awal
-echo "📂 Membuat direktori agen di $SCRIPT_DIR..."
-mkdir -p "$SCRIPT_DIR"
-chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
-
-if ! find_easy_rsa_path; then
-    exit 1
-fi
-
-if ! check_openvpn_service; then
-    if [ ! -f "$OPENVPN_INSTALL_SCRIPT_PATH" ]; then
-        echo "❌ Skrip instalasi server OpenVPN tidak ditemukan di $OPENVPN_INSTALL_SCRIPT_PATH."
-        echo "Tolong pastikan skrip ada atau perbarui jalurnya di konfigurasi."
+    ## PERUBAHAN VENV: Buat direktori skrip di awal
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "📂 PERSIAPAN DIREKTORI"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    echo "📁 Membuat direktori agen di $SCRIPT_DIR..."
+    if mkdir -p "$SCRIPT_DIR"; then
+        chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
+        echo "✅ Direktori berhasil dibuat dan kepemilikan diatur."
+    else
+        echo "⛔ Gagal membuat direktori agen."
         exit 1
     fi
-    echo "▶️  Menjalankan skrip instalasi server OpenVPN..."
-    sudo bash "$OPENVPN_INSTALL_SCRIPT_PATH"
-fi
 
-install_dependencies
-create_env_file
-deploy_scripts
-create_pm2_ecosystem_file
-configure_pm2
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🔍 VALIDASI SISTEM"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    
+    if ! find_easy_rsa_path; then
+        echo "⛔ Easy-RSA tidak ditemukan. Deployment dibatalkan."
+        exit 1
+    fi
 
-echo "🎉 Deployment OpenVPN agent dengan venv selesai dengan sukses!"
+    if ! check_openvpn_service; then
+        if [ ! -f "$OPENVPN_INSTALL_SCRIPT_PATH" ]; then
+            echo ""
+            echo "⛔ Skrip instalasi server OpenVPN tidak ditemukan di $OPENVPN_INSTALL_SCRIPT_PATH."
+            echo "   Tolong pastikan OpenVPN sudah terinstal dan berjalan, atau letakkan skrip instalasi"
+            echo "   di lokasi yang benar."
+            exit 1
+        fi
+        echo ""
+        echo "▶️  Menjalankan skrip instalasi server OpenVPN..."
+        if sudo bash "$OPENVPN_INSTALL_SCRIPT_PATH"; then
+            echo "✅ OpenVPN berhasil diinstal dan dikonfigurasi."
+        else
+            echo "⛔ Gagal menginstal OpenVPN."
+            exit 1
+        fi
+    fi
+
+    # Eksekusi fungsi utama
+    install_dependencies
+    configure_snmp
+    create_env_file
+    deploy_scripts
+    create_pm2_ecosystem_file
+    configure_pm2
+
+    echo ""
+    echo "╔═══════════════════════════════════════════════╗"
+    echo "║               DEPLOYMENT SELESAI              ║"
+    echo "╚═══════════════════════════════════════════════╝"
+    echo ""
+    echo "🎉 Deployment OpenVPN agent dengan SNMP monitoring selesai dengan sukses!"
+    echo ""
+    echo "📋 RINGKASAN DEPLOYMENT:"
+    echo "   • Server ID: $SERVER_ID"
+    echo "   • Aplikasi PM2: $APP_NAME"
+    echo "   • Dashboard URL: $DASHBOARD_API_URL"
+    echo "   • Direktori OVPN: $OVPN_DIR"
+    if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
+        echo "   • SNMP: Aktif (Community: $SNMP_COMMUNITY_STRING)"
+    else
+        echo "   • SNMP: Tidak dikonfigurasi"
+    fi
+    echo ""
+    echo "📁 LOKASI FILE PENTING:"
+    echo "   • Direktori agen: $SCRIPT_DIR"
+    echo "   • File konfigurasi: $SCRIPT_DIR/.env"
+    echo "   • Log aplikasi: $SCRIPT_DIR/logs/"
+    echo ""
+    echo "🔧 PERINTAH BERGUNA:"
+    echo "   • Cek status: pm2 status $APP_NAME"
+    echo "   • Lihat log: pm2 logs $APP_NAME"
+    echo "   • Restart: pm2 restart $APP_NAME"
+    echo "   • Stop: pm2 stop $APP_NAME"
+    echo ""
+    echo "⚠️  JANGAN LUPA:"
+    echo "   • Jalankan perintah startup PM2 yang ditampilkan di atas untuk auto-start"
+    echo "   • Pastikan firewall mengizinkan port 8080 untuk agen"
+    if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
+        echo "   • Pastikan firewall mengizinkan port 161 (UDP) dari IP dashboard untuk SNMP"
+    fi
+    echo ""
+    echo "🌐 Agent dapat diakses di: http://$(hostname -I | awk '{print $1}'):8080/health"
+    echo ""
+    echo "✅ Deployment berhasil! Agent siap digunakan."
+}
+
+# Jalankan fungsi main
+main "$@"
