@@ -135,13 +135,12 @@ sudo pm2 stop vpn-agent
 
 ## 🔗 Integration with OpenVPN Management Dashboard
 
-This agent is designed to work with the OpenVPN Management Dashboard (https://github.com/SoramiKS/openvpn-dashboard).
+This agent is designed to work with the OpenVPN Management Dashboard [OpenVPN Agent Repository](https://github.com/SoramiKS/openvpn-dashboard).
 The dashboard provides a modern web interface for monitoring and managing OpenVPN servers connected to this agent.
 
 Integration steps:
 
-1. Install and run the dashboard from the following repository:
-🔗 https://github.com/SoramiKS/openvpn-dashboard
+1. Install and run the dashboard from the repository.
 2. Use the same AGENT_API_KEY on both the dashboard and the agent.
 3. Ensure the SERVER_ID in the agent is unique for each server.
 4. Once the agent is running, the dashboard will automatically detect the connection and display server information along with a list of VPN profiles.
