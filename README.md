@@ -1,118 +1,155 @@
-# OpenVPN Agent Deployment Script
+# 🚀 OpenVPN Management Agent Deployment
 
-Skrip ini dirancang untuk mengotomatiskan seluruh proses deployment Agen OpenVPN pada server baru berbasis Debian/Ubuntu. Agen ini berfungsi sebagai jembatan antara server OpenVPN Anda dan **OpenVPN Management Dashboard**, memungkinkan monitoring dan pengelolaan pengguna dari satu antarmuka.
+A **powerful automation script** to deploy a management agent on your
+OpenVPN server.\
+The agent is a **FastAPI app** that chats with your central dashboard →
+manage VPN users & monitor server status remotely.
 
----
+![Linux](https://img.shields.io/badge/Ubuntu-22.04%20LTS-E95420?logo=ubuntu&logoColor=white)\
+![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)\
+![Node.js](https://img.shields.io/badge/Node.js-PM2-339933?logo=node.js&logoColor=white)\
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-## 📜 Deskripsi
+------------------------------------------------------------------------
 
-Tujuan utama skrip ini adalah untuk menghilangkan langkah-langkah manual yang repetitif dan rawan kesalahan saat menyiapkan server OpenVPN baru untuk diintegrasikan dengan dashboard. Skrip ini menangani semua hal mulai dari instalasi dependensi, pembuatan lingkungan virtual yang terisolasi, hingga konfigurasi layanan agar berjalan secara persisten.
+## ✨ Features
 
----
+-   ⚙️ **Automated Setup** → Installs Python3, Node.js, PM2.\
+-   🖥️ **Interactive Config** → User-friendly CLI prompts.\
+-   🔄 **Process Management** → Runs as PM2 background service
+    (auto-restart).\
+-   📡 **SNMP Monitoring** → (Optional) dashboard CPU, RAM & network
+    stats.\
+-   🔑 **Secure** → API key authentication + proper file permissions.\
+-   📦 **Self-contained** → All scripts + venv neatly in one directory.\
+-   💣 **Remote Decommissioning** → Self-destruct on command.
 
-## ✨ Fitur Utama
+------------------------------------------------------------------------
 
-- **Otomatisasi Penuh**: Menjalankan seluruh proses setup dengan satu perintah.
-- **Instalasi Dependensi**: Menginstal semua paket yang diperlukan seperti `python3`, `pip`, `venv`, `nodejs`, dan `pm2`.
-- **Lingkungan Terisolasi**: Membuat Python Virtual Environment (venv) untuk mencegah konflik dependensi.
-- **Konfigurasi Interaktif**: Mengumpulkan data penting (API Key, Server ID, URL Dashboard) langsung dari pengguna.
-- **Deployment Dinamis**: Membuat skrip-skrip yang diperlukan secara otomatis di server:
-  - `main.py`: Agen FastAPI inti.
-  - `openvpn-client-manager.sh`: Skrip utilitas klien VPN.
-  - `.env`: File konfigurasi berisi kredensial dan path.
-  - `ecosystem.config.js`: Konfigurasi PM2.
-- **Manajemen Proses dengan PM2**: Agen Python berjalan secara persisten dan restart otomatis.
-- **Deteksi Otomatis**: Memeriksa path `index.txt` Easy-RSA dan status layanan OpenVPN.
+## 📋 Prerequisites
 
----
+You'll need:\
+- Ubuntu **22.04 LTS** server 🐧\
+- `sudo` / root access\
+- Existing OpenVPN installation (if not, script looks for
+`/root/ubuntu-22.04-lts-vpn-server.sh`)\
+- Dashboard details:\
+- `AGENT_API_KEY` 🔑\
+- `SERVER_ID` 🆔\
+- `DASHBOARD_API_URL` 🌍
 
-## 🛠️ Prasyarat
+------------------------------------------------------------------------
 
-- Server Debian/Ubuntu baru.
-- Akses root atau hak sudo.
-- Skrip utama instalasi OpenVPN (`ubuntu-22.04-lts-vpn-server.sh`) sudah ada di `/root/`.
-- Untuk penginstalan OpenVPN nya bisa dari tutorial berikut:
-- https://www.cyberciti.biz/faq/ubuntu-22-04-lts-set-up-openvpn-server-in-5-minutes/
+## ⚡ Installation
 
----
+Clone repo:
 
-## 🚀 Cara Penggunaan
-
-### 1. Salin Skrip ke Server
-```bash
-wget https://raw.githubusercontent.com/SoramiKS/ovpn-agent-bash/refs/heads/main/deploymentovpn.sh
+``` bash
+git clone <your-repo-url>
+cd <your-repo-directory>
 ```
 
-### 2. Berikan Izin Eksekusi
-```bash
-chmod +x deploymentovpn.sh
+Or upload the script:
+
+``` bash
+chmod +x deploymentovpn-refined.sh
+sudo ./deploymentovpn-refined.sh
 ```
 
-### 3. Jalankan dengan Sudo
-```bash
-sudo ./deploymentovpn.sh
+Follow prompts:\
+- **App Name** → name for PM2 process\
+- **API Key / Server ID / Dashboard URL** → from your dashboard\
+- **OVPN Directory** → where `.ovpn` files are stored\
+- **SNMP** → configure or skip
+
+------------------------------------------------------------------------
+
+## 🔧 Post-Install
+
+Enable **PM2 Startup** on reboot (script will tell you the command):
+
+``` bash
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u <user> --hp /home/<user>
 ```
 
-### 4. Ikuti Proses Konfigurasi
-Masukkan:
-- **Nama Aplikasi untuk PM2** (contoh: `vpn-agent-jakarta`)
-- **AGENT_API_KEY** (harus sama dengan di dashboard)
-- **Alamat Dashboard** (IP/domain)
-- **SERVER_ID** (unik per server)
-- **Direktori OVPN** (lokasi file `.ovpn`)
+Update firewall:
 
----
+``` bash
+# Agent API
+sudo ufw allow from <DASHBOARD_IP> to any port 8080 proto tcp
 
-## ⚙️ Cara Kerja Skrip
-
-1. **Pemeriksaan Awal**: Memastikan dijalankan dengan sudo.
-2. **Pengumpulan Input**: Mengambil konfigurasi dari pengguna.
-3. **Pembuatan Direktori**: `./openvpn-agent`
-4. **Validasi OpenVPN**: Menjalankan skrip instalasi jika OpenVPN belum aktif.
-5. **Instalasi Dependensi**: `openvpn`, `python3-venv`, `nodejs`, `pm2`, dll.
-6. **Setup Virtual Environment**: Menginstal pustaka Python seperti `fastapi`, `uvicorn`, `requests`.
-7. **Pembuatan File**:
-   - `.env`
-   - `main.py`
-   - `openvpn-client-manager.sh`
-   - `ecosystem.config.js`
-8. **Konfigurasi PM2**: Menjalankan agen dan set agar autostart.
-
----
-
-## ✅ Verifikasi Pasca-Instalasi
-
-**Cek Status PM2**
-```bash
-pm2 status
+# SNMP (if enabled)
+sudo ufw allow from <DASHBOARD_IP> to any port 161 proto udp
 ```
 
-**Lihat Log Output**
-```bash
-tail -f ./openvpn-agent/logs/agent-out.log
+Check health:
+
+``` bash
+curl http://127.0.0.1:8080/health
+# {"status":"ok"}
 ```
 
-**Lihat Log Error**
-```bash
-tail -f ./openvpn-agent/logs/agent-err.log
+------------------------------------------------------------------------
+
+## 📂 File Structure
+
+    openvpn-agent/
+    ├── .env                      # Secrets & env variables
+    ├── ecosystem.config.js       # PM2 config
+    ├── main.py                   # FastAPI agent
+    ├── openvpn-client-manager.sh # Helper for user mgmt
+    ├── self-destruct.sh          # Clean uninstall
+    ├── venv/                     # Python venv
+    └── logs/
+        ├── agent-out.log
+        └── agent-err.log
+
+------------------------------------------------------------------------
+
+## 🛠️ Managing the Agent (PM2)
+
+``` bash
+# Check status
+sudo pm2 status vpn-agent
+
+# Logs
+sudo pm2 logs vpn-agent
+
+# Restart
+sudo pm2 restart vpn-agent
+
+# Stop
+sudo pm2 stop vpn-agent
 ```
 
----
+------------------------------------------------------------------------
 
-## 🔗 Integrasi dengan OpenVPN Management Dashboard
+## 💡 Pro Tips
 
-Agen ini dirancang untuk bekerja bersama [**OpenVPN Management Dashboard**](https://github.com/SoramiKS/openvpn-dashboard).  
-Dashboard tersebut menyediakan antarmuka web modern untuk memantau dan mengelola server OpenVPN yang terhubung dengan agen ini.
+-   Run with `screen` or `tmux` if you're paranoid about SSH
+    disconnects.\
+-   Use a strong `AGENT_API_KEY`. Don't let your VPN become a public
+    café WiFi. ☕\
+-   Wanna nuke everything? Run `self-destruct.sh` --- agent yeets itself
+    💥.
 
-**Langkah integrasi:**
-1. Install dan jalankan dashboard dari repositori berikut:  
-   🔗 https://github.com/SoramiKS/openvpn-dashboard
-2. Gunakan **AGENT_API_KEY** yang sama di dashboard dan agen.
-3. Pastikan **SERVER_ID** di agen unik untuk setiap server.
-4. Setelah agen dijalankan, dashboard akan otomatis mendeteksi koneksi dan menampilkan informasi server beserta daftar profil VPN.
+------------------------------------------------------------------------
 
----
+## 🔗 Integration with OpenVPN Management Dashboard
+
+This agent is designed to work with the OpenVPN Management Dashboard (https://github.com/SoramiKS/openvpn-dashboard).
+The dashboard provides a modern web interface for monitoring and managing OpenVPN servers connected to this agent.
+
+Integration steps:
+
+1. Install and run the dashboard from the following repository:
+🔗 https://github.com/SoramiKS/openvpn-dashboard
+2. Use the same AGENT_API_KEY on both the dashboard and the agent.
+3. Ensure the SERVER_ID in the agent is unique for each server.
+4. Once the agent is running, the dashboard will automatically detect the connection and display server information along with a list of VPN profiles.
+   
+------------------------------------------------------------------------
 
 
-## 📜 Lisensi
-Proyek ini dilisensikan di bawah **MIT License**.
+## 📜 License
+This project is licensed under the **MIT License**.
