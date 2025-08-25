@@ -5,9 +5,9 @@ OpenVPN server.\
 The agent is a **FastAPI app** that chats with your central dashboard →
 manage VPN users & monitor server status remotely.
 
-![Linux](https://img.shields.io/badge/Ubuntu-22.04%20LTS-E95420?logo=ubuntu&logoColor=white)\
-![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)\
-![Node.js](https://img.shields.io/badge/Node.js-PM2-339933?logo=node.js&logoColor=white)\
+![Linux](https://img.shields.io/badge/Ubuntu-22.04%20LTS-E95420?logo=ubuntu&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-PM2-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 ------------------------------------------------------------------------
@@ -45,15 +45,14 @@ You'll need:\
 Clone repo:
 
 ``` bash
-git clone <your-repo-url>
-cd <your-repo-directory>
+wget https://raw.githubusercontent.com/SoramiKS/ovpn-agent-bash/refs/heads/main/deploymentovpn.sh -O install.sh
 ```
 
 Or upload the script:
 
 ``` bash
-chmod +x deploymentovpn-refined.sh
-sudo ./deploymentovpn-refined.sh
+chmod +x install.sh
+sudo ./install.sh
 ```
 
 Follow prompts:\
