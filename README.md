@@ -31,8 +31,8 @@ manage VPN users & monitor server status remotely.
 You'll need:\
 - Ubuntu **22.04 LTS** server 🐧\
 - `sudo` / root access\
-- Existing OpenVPN installation (if not, script looks for
-`/root/ubuntu-22.04-lts-vpn-server.sh`)\
+- Existing OpenVPN installation and script from this installation: https://www.cyberciti.biz/faq/ubuntu-22-04-lts-set-up-openvpn-server-in-5-minutes/
+  (Need the `ubuntu-22.04-lts-vpn-server.sh` file)
 - Dashboard details:\
 - `AGENT_API_KEY` 🔑\
 - `SERVER_ID` 🆔\
