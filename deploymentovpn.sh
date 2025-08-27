@@ -365,8 +365,8 @@ install_dependencies() {
     fi
     
     # FIX: Remove psutil as we are using SNMP
-    echo "   Installing: fastapi, uvicorn, pydantic, python-dotenv, requests, aiohttp..."
-    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv requests aiohttp --quiet; then
+    echo "   Installing: fastapi, uvicorn, pydantic, python-dotenv, requests, psutil, aiohttp..."
+    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp --quiet; then
         echo "✅ All Python dependencies installed successfully within the virtual environment."
     else
         echo "⛔ Failed to install Python dependencies."
@@ -535,6 +535,7 @@ import hashlib
 import sys
 from typing import List, Optional
 import shlex
+import psutil
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, '.env'))
@@ -574,6 +575,24 @@ async def verify_api_key(request: Request, call_next):
         if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != AGENT_API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
+
+# --- FUNGSI BARU UNTUK METRIK ---
+def get_cpu_usage() -> float:
+    """Returns the system-wide CPU utilization as a percentage."""
+    try:
+        # interval=1 means it will block for 1 second to compare usage
+        return psutil.cpu_percent(interval=1)
+    except Exception as e:
+        print(f"Error getting CPU usage: {e}")
+        return 0.0
+
+def get_ram_usage() -> float:
+    """Returns the system-wide RAM utilization as a percentage."""
+    try:
+        return psutil.virtual_memory().percent
+    except Exception as e:
+        print(f"Error getting RAM usage: {e}")
+        return 0.0
 
 # --- Utility Functions ---
 def sanitize_username(username: str) -> str:
@@ -790,15 +809,19 @@ async def background_task_loop():
             # 1. Report Node Metrics (service status only, CPU/RAM via SNMP)
             service_status = get_openvpn_service_status()
             active_users = get_openvpn_active_users_from_status_log()
+            cpu_usage = await asyncio.to_thread(get_cpu_usage)
+            ram_usage = await asyncio.to_thread(get_ram_usage)
             node_metrics_payload = {
                 "serverId": SERVER_ID,
                 "serviceStatus": service_status,
-                "activeUsers": active_users
+                "activeUsers": active_users,
+                "cpuUsage": cpu_usage,
+                "ramUsage": ram_usage
             }
             await asyncio.to_thread(
                 requests.post, f"{DASHBOARD_API_URL}/agent/report-status", json=node_metrics_payload, headers=headers, timeout=10
             )
-            print(f"Sent status report for server {SERVER_ID}")
+            print(f"Sent status report for server {SERVER_ID} (CPU: {cpu_usage}%, RAM: {ram_usage}%)")
 
             # 2. Sync VPN Profiles (on change)
             current_profiles, current_profiles_checksum = parse_index_txt()
