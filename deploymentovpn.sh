@@ -81,7 +81,7 @@ get_user_input() {
         echo "Select the Dashboard API address type:"
         echo "1) IP Address (e.g., 192.168.1.42)"
         echo "2) Domain Name (e.g., dashboard.example.com)"
-        read -p "Your choice [2]: " URL_CHOICE
+        read -p "Your choice [Default 2]: " URL_CHOICE
         URL_CHOICE=${URL_CHOICE:-2}
 
         case "$URL_CHOICE" in
@@ -109,7 +109,8 @@ get_user_input() {
             2)
                 local domain_valid=0
                 while [ $domain_valid -eq 0 ]; do
-                    read -p "🌐 Enter the Dashboard API Domain Name (e.g., dashboard.example.com or https://dashboard.example.com): " DASHBOARD_HOST_RAW
+                    read -p "🌐 Enter the Dashboard API Domain Name (Default: vpn.clouddonut.net): " DASHBOARD_HOST_RAW
+                    DASHBOARD_HOST_RAW=${DASHBOARD_HOST_RAW:-vpn.clouddonut.net}
                     if [[ -z "$DASHBOARD_HOST_RAW" ]]; then
                         echo "⛔ Domain name cannot be empty."
                     else
@@ -147,7 +148,7 @@ get_user_input() {
     done
 
     # Ask about a custom port (applies to both IP and Domain)
-    read -p "Does the Dashboard API use a custom port (e.g., 3000)? [y/N]: " USE_CUSTOM_PORT
+    read -p "Does the Dashboard API use a custom port (e.g., 3000)? (Default: N) [y/N]: " USE_CUSTOM_PORT
     USE_CUSTOM_PORT=${USE_CUSTOM_PORT:-N}
 
     local FINAL_PORT_PART=""
@@ -184,7 +185,7 @@ get_user_input() {
     done
 
     echo ""
-    read -p "📁 Enter the directory for OVPN files (default: /root): " OVPN_DIR_INPUT
+    read -p "📁 Enter the directory for OVPN files (Default: /root): " OVPN_DIR_INPUT
     OVPN_DIR=${OVPN_DIR_INPUT:-/root}
     echo "✅ OVPN directory: $OVPN_DIR"
 }
@@ -196,7 +197,7 @@ get_snmp_input() {
     echo "🛡️  SNMP MONITORING CONFIGURATION"
     echo "═══════════════════════════════════════════════"
     echo ""
-    read -p "🔧 Do you want to configure SNMP for monitoring? [y/N]: " CONFIGURE_SNMP
+    read -p "🔧 Do you want to configure SNMP for monitoring? (Default: N) [y/N]: " CONFIGURE_SNMP
     CONFIGURE_SNMP=${CONFIGURE_SNMP:-N}
 
     if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
