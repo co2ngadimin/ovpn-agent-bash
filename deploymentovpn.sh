@@ -16,7 +16,7 @@ set -e
 PYTHON_AGENT_SCRIPT_NAME="main.py"
 CLIENT_MANAGER_SCRIPT_NAME="openvpn-client-manager.sh"
 OPENVPN_INSTALL_SCRIPT_PATH="/root/ubuntu-22.04-lts-vpn-server.sh"
-NODE_VERSION="v22.17.1"
+NODE_VERSION="v22.19"
 NODE_DIR="node-$NODE_VERSION-linux-x64"
 NODE_URL="https://nodejs.org/dist/$NODE_VERSION/$NODE_DIR.tar.gz"
 
