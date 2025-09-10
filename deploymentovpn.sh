@@ -81,7 +81,8 @@ get_user_input() {
         echo "Select the Dashboard API address type:"
         echo "1) IP Address (e.g., 192.168.1.42)"
         echo "2) Domain Name (e.g., dashboard.example.com)"
-        read -p "Your choice (1 or 2): " URL_CHOICE
+        read -p "Your choice [2]: " URL_CHOICE
+        URL_CHOICE=${URL_CHOICE:-2}
 
         case "$URL_CHOICE" in
             1)
@@ -196,8 +197,8 @@ get_snmp_input() {
     echo "🛡️  SNMP MONITORING CONFIGURATION"
     echo "═══════════════════════════════════════════════"
     echo ""
-    read -p "🔧 Do you want to configure SNMP for monitoring? [Y/n]: " CONFIGURE_SNMP
-    CONFIGURE_SNMP=${CONFIGURE_SNMP:-Y}
+    read -p "🔧 Do you want to configure SNMP for monitoring? [y/N]: " CONFIGURE_SNMP
+    CONFIGURE_SNMP=${CONFIGURE_SNMP:-N}
 
     if [[ "$CONFIGURE_SNMP" =~ ^[yY]$ ]]; then
         echo ""
