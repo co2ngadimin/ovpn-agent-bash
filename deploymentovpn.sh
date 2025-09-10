@@ -184,9 +184,8 @@ get_user_input() {
     done
 
     echo ""
-    local default_ovpn_dir="/home/$SUDO_USER/ovpn"
-    read -p "📁 Enter the directory for OVPN files (default: $default_ovpn_dir): " OVPN_DIR_INPUT
-    OVPN_DIR=${OVPN_DIR_INPUT:-$default_ovpn_dir}
+    read -p "📁 Enter the directory for OVPN files (default: /root): " OVPN_DIR_INPUT
+    OVPN_DIR=${OVPN_DIR_INPUT:-/root}
     echo "✅ OVPN directory: $OVPN_DIR"
 }
 
