@@ -302,83 +302,51 @@ install_dependencies() {
     dos2unix "$0" >/dev/null 2>&1
 
     echo ""
-    echo "⚙️  Installing Node.js manually..."
-    if ! command -v node &> /dev/null; then
-        echo "📥 Node.js not found. Installing Node.js $NODE_VERSION..."
-        
-        # Download with a progress bar
-        echo "⬇️  Downloading Node.js..."
-        curl -# -o /tmp/"$NODE_DIR".tar.gz "$NODE_URL"
-        
-        echo "📂 Extracting Node.js..."
-        tar -xzf /tmp/"$NODE_DIR".tar.gz -C /tmp/
-        mkdir -p /usr/local/lib/nodejs
-        cp -Rv /tmp/"$NODE_DIR" /usr/local/lib/nodejs/ >/dev/null
+    echo "⚙️  Installing Node.js via NVM..."
+    # Jalankan perintah sebagai SUDO_USER agar NVM terinstal di home directory yang benar
+    sudo -i -u "$SUDO_USER" bash << EOF
+    echo "บ้าน Installing NVM for user $SUDO_USER..."
+    # Ambil skrip instalasi NVM terbaru dan jalankan
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 
-        # Create symlinks
-        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/node /usr/bin/node
-        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/npm /usr/bin/npm
-        ln -sf /usr/local/lib/nodejs/"$NODE_DIR"/bin/npx /usr/bin/npx
+    # Source NVM script agar bisa langsung digunakan di dalam sub-shell ini
+    export NVM_DIR="\$HOME/.nvm"
+    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
+    [ -s "\$NVM_DIR/bash_completion" ] && \. "\$NVM_DIR/bash_completion"
 
-        echo "✅ Verifying Node.js installation..."
-        node_version=$(node -v)
-        echo "   Node.js version: $node_version"
-        echo "✅ Node.js installed successfully."
-    else
-        current_node_version=$(node -v)
-        echo "☑️  Node.js is already installed (version: $current_node_version). Skipping."
-    fi
+    echo "บ้าน Installing Node.js version $NODE_VERSION with NVM..."
+    nvm install $NODE_VERSION
+
+    echo "บ้าน Setting Node.js $NODE_VERSION as default..."
+    nvm alias default $NODE_VERSION
+    nvm use default
+EOF
+
+    echo "✅ Verifying Node.js installation..."
+    # Verifikasi dengan cara yang sama, dijalankan sebagai SUDO_USER
+    NODE_VERSION_CHECK=\$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && node -v')
+    echo "   Node.js version: \$NODE_VERSION_CHECK"
+    echo "✅ Node.js and NVM installed successfully for user \$SUDO_USER."
 
     echo ""
     echo "⚙️  Installing PM2..."
-    # BUG FIX: Install PM2 as root user
-    if ! command -v pm2 &> /dev/null; then
-        npm install -g pm2 >/dev/null 2>&1
-        echo "✅ PM2 installed globally successfully."
+    # Pastikan PM2 diinstal menggunakan Node.js dari NVM
+    if ! sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && command -v pm2 &> /dev/null'; then
+        echo "   PM2 not found, installing globally for NVM's Node version..."
+        sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && npm install -g pm2'
+        echo "✅ PM2 installed globally."
     else
-        pm2_version=$(pm2 --version)
-        echo "☑️  PM2 is already installed (version: $pm2_version). Skipping."
+        echo "☑️  PM2 is already installed. Skipping."
     fi
 
-    # Konfigurasi PM2 PATH
-    echo "🔗 Mengkonfigurasi PM2 PATH..."
-    # Ganti baris ini:
-    # NPM_GLOBAL_BIN_PATH=$(sudo -u "$SUDO_USER" bash -c "npm config get prefix")/bin
-    # Dengan baris ini:
-    NPM_GLOBAL_BIN_PATH="/usr/local/lib/nodejs/$NODE_DIR/bin"
-    echo "ℹ️ Jalur global NPM yang terdeteksi untuk $SUDO_USER: $NPM_GLOBAL_BIN_PATH"
-
-    SHELL_PROFILE=""
-    if [ "$USER" = "root" ] || [ "$SUDO_USER" = "root" ]; then
-        HOME_DIR="/root"
+    # Buat symbolic link agar PM2 bisa dipanggil oleh root/sudo
+    PM2_PATH=\$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && which pm2')
+    if [ -n "$PM2_PATH" ]; then
+        ln -sf "$PM2_PATH" /usr/local/bin/pm2
+        echo "✅ PM2 symlink created at /usr/local/bin/pm2"
     else
-        HOME_DIR="/home/$SUDO_USER"
-    fi
-    
-    if [ -f "$HOME_DIR/.zshrc" ]; then
-        SHELL_PROFILE="$HOME_DIR/.zshrc"
-    elif [ -f "$HOME_DIR/.bashrc" ]; then
-        SHELL_PROFILE="$HOME_DIR/.bashrc"
-    else
-        touch "$HOME_DIR/.bashrc"
-        SHELL_PROFILE="$HOME_DIR/.bashrc"
-    fi
-
-    if [ -n "$SHELL_PROFILE" ]; then
-        if ! grep -q "$NPM_GLOBAL_BIN_PATH" "$SHELL_PROFILE" 2>/dev/null; then
-            echo "export PATH=\"\$PATH:$NPM_GLOBAL_BIN_PATH\"" | sudo tee -a "$SHELL_PROFILE" > /dev/null
-            export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
-        fi
-        if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
-            ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
-        fi
-    fi
-
-    if command -v pm2 &> /dev/null; then
-        echo "✅ PM2 dapat diakses dari baris perintah."
-        pm2 --version
-    else
-        echo "❌ Instalasi PM2 mungkin gagal."
+        echo "⛔ Could not find PM2 path. Deployment might fail."
+        exit 1
     fi
 
     echo ""
