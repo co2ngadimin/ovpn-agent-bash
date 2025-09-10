@@ -287,7 +287,7 @@ check_openvpn_service() {
 install_dependencies() {
     echo ""
     echo "═══════════════════════════════════════════════"
-    echo "⚙️  INSTALLING SYSTEM DEPENDENCIES"
+    echo "⚙️  INSTALLING SYSTEM DEPENDENCIES (FOR ROOT)"
     echo "═══════════════════════════════════════════════"
     echo ""
     
@@ -295,54 +295,60 @@ install_dependencies() {
     apt-get update -qq
 
     echo "📦 Installing system dependencies..."
-    # FIX: Add snmpd for SNMP monitoring, remove psutil as it's not needed
     apt-get install -y openvpn python3 python3-pip python3-venv expect curl dos2unix at snmpd
-    # BUG FIX: Install sudo if not already installed, so 'sudo -u' can be used
-    apt-get install -y sudo
 
-    # Fix line endings of this script
     dos2unix "$0" >/dev/null 2>&1
 
     echo ""
-    echo "⚙️  Installing Node.js via NVM..."
-    # Jalankan perintah sebagai SUDO_USER agar NVM terinstal di home directory yang benar
-    sudo -i -u "$SUDO_USER" bash << EOF
-    echo "--> Installing NVM for user $SUDO_USER..."
-    # Ambil skrip instalasi NVM terbaru dan jalankan
+    echo "⚙️  Installing Node.js via NVM for root..."
+    
+    echo "--> Installing NVM..."
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 
-    # Source NVM script agar bisa langsung digunakan di dalam sub-shell ini
-    export NVM_DIR="\$HOME/.nvm"
-    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
-    [ -s "\$NVM_DIR/bash_completion" ] && \. "\$NVM_DIR/bash_completion"
-
-    echo "--> Installing Node.js version $NODE_VERSION with NVM..."
-    nvm install $NODE_VERSION
-
-    echo "--> Setting Node.js $NODE_VERSION as default..."
-    nvm alias default $NODE_VERSION
+    export NVM_DIR="$HOME/.nvm"
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
+        # Muat NVM ke sesi skrip saat ini
+        source "$NVM_DIR/nvm.sh"
+    else
+        echo "⛔ Failed to source NVM script. Aborting."
+        exit 1
+    fi
+    
+    echo "--> Installing Node.js version $NODE_VERSION..."
+    nvm install "$NODE_VERSION"
+    nvm alias default "$NODE_VERSION"
     nvm use default
-EOF
 
     echo "✅ Verifying Node.js installation..."
-    # Verifikasi dengan cara yang sama, dijalankan sebagai SUDO_USER
-    NODE_VERSION_CHECK=$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && node -v')
-    echo "   Node.js version: $NODE_VERSION_CHECK"
-    echo "✅ Node.js and NVM installed successfully for user $SUDO_USER."
+    node -v
+    echo "✅ Node.js and NVM installed successfully for root."
 
     echo ""
     echo "⚙️  Installing PM2..."
-    # Pastikan PM2 diinstal menggunakan Node.js dari NVM
-    if ! sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && command -v pm2 &> /dev/null'; then
-        echo "   PM2 not found, installing globally for NVM's Node version..."
-        sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && npm install -g pm2'
+    if ! command -v pm2 &> /dev/null; then
+        echo "   PM2 not found, installing globally..."
+        npm install -g pm2
         echo "✅ PM2 installed globally."
     else
         echo "☑️  PM2 is already installed. Skipping."
     fi
 
-    # Buat symbolic link agar PM2 bisa dipanggil oleh root/sudo
-    PM2_PATH=$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && which pm2')
+    # === BAGIAN PERBAIKAN PENTING DIMULAI DI SINI ===
+    echo ""
+    echo "🔗 Creating system-wide symbolic links..."
+
+    # Cari path Node dan PM2 yang diinstal NVM
+    NODE_PATH=$(which node)
+    PM2_PATH=$(which pm2)
+
+    if [ -n "$NODE_PATH" ]; then
+        ln -sf "$NODE_PATH" /usr/local/bin/node
+        echo "✅ Node symlink created at /usr/local/bin/node"
+    else
+        echo "⛔ Could not find Node path. Deployment might fail."
+        exit 1
+    fi
+
     if [ -n "$PM2_PATH" ]; then
         ln -sf "$PM2_PATH" /usr/local/bin/pm2
         echo "✅ PM2 symlink created at /usr/local/bin/pm2"
@@ -350,6 +356,7 @@ EOF
         echo "⛔ Could not find PM2 path. Deployment might fail."
         exit 1
     fi
+    # === BAGIAN PERBAIKAN SELESAI ===
 
     echo ""
     echo "═══════════════════════════════════════════════"
@@ -358,27 +365,15 @@ EOF
     echo ""
     
     echo "🏗️  Creating Python virtual environment at $VENV_PATH..."
-    # Create venv as SUDO_USER to ensure correct ownership
-    if sudo -u "$SUDO_USER" python3 -m venv "$VENV_PATH"; then
-        echo "✅ Virtual environment created successfully."
-    else
-        echo "⛔ Failed to create virtual environment. Check your Python3 installation."
-        exit 1
-    fi
+    python3 -m venv "$VENV_PATH"
+    echo "✅ Virtual environment created successfully."
 
-    echo "📦 Installing Python dependencies inside the venv..."
-    # Run pip from within the venv to install packages locally
-    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install --upgrade pip --quiet; then
-        echo "✅ pip updated successfully."
-    else
-        echo "⛔ Failed to update pip."
-        exit 1
-    fi
+    echo "📦 Installing Python dependencies..."
+    "$VENV_PATH/bin/pip" install --upgrade pip --quiet
     
-    # FIX: Remove psutil as we are using SNMP
     echo "   Installing: fastapi, uvicorn, pydantic, python-dotenv, requests, psutil, aiohttp..."
-    if sudo -u "$SUDO_USER" "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp --quiet; then
-        echo "✅ All Python dependencies installed successfully within the virtual environment."
+    if "$VENV_PATH/bin/pip" install fastapi "uvicorn[standard]" pydantic python-dotenv psutil requests aiohttp --quiet; then
+        echo "✅ All Python dependencies installed successfully."
     else
         echo "⛔ Failed to install Python dependencies."
         exit 1
