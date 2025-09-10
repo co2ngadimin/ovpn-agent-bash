@@ -282,6 +282,7 @@ check_openvpn_service() {
 }
 
 # Install system dependencies, Node.js, and Python
+# Install system dependencies, Node.js, and Python
 install_dependencies() {
     echo ""
     echo "═══════════════════════════════════════════════"
@@ -305,28 +306,28 @@ install_dependencies() {
     echo "⚙️  Installing Node.js via NVM..."
     # Jalankan perintah sebagai SUDO_USER agar NVM terinstal di home directory yang benar
     sudo -i -u "$SUDO_USER" bash << EOF
-    echo "บ้าน Installing NVM for user $SUDO_USER..."
+    echo "--> Installing NVM for user $SUDO_USER..."
     # Ambil skrip instalasi NVM terbaru dan jalankan
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 
     # Source NVM script agar bisa langsung digunakan di dalam sub-shell ini
     export NVM_DIR="\$HOME/.nvm"
     [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
     [ -s "\$NVM_DIR/bash_completion" ] && \. "\$NVM_DIR/bash_completion"
 
-    echo "บ้าน Installing Node.js version $NODE_VERSION with NVM..."
+    echo "--> Installing Node.js version $NODE_VERSION with NVM..."
     nvm install $NODE_VERSION
 
-    echo "บ้าน Setting Node.js $NODE_VERSION as default..."
+    echo "--> Setting Node.js $NODE_VERSION as default..."
     nvm alias default $NODE_VERSION
     nvm use default
 EOF
 
     echo "✅ Verifying Node.js installation..."
     # Verifikasi dengan cara yang sama, dijalankan sebagai SUDO_USER
-    NODE_VERSION_CHECK=\$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && node -v')
-    echo "   Node.js version: \$NODE_VERSION_CHECK"
-    echo "✅ Node.js and NVM installed successfully for user \$SUDO_USER."
+    NODE_VERSION_CHECK=$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && node -v')
+    echo "   Node.js version: $NODE_VERSION_CHECK"
+    echo "✅ Node.js and NVM installed successfully for user $SUDO_USER."
 
     echo ""
     echo "⚙️  Installing PM2..."
@@ -340,7 +341,7 @@ EOF
     fi
 
     # Buat symbolic link agar PM2 bisa dipanggil oleh root/sudo
-    PM2_PATH=\$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && which pm2')
+    PM2_PATH=$(sudo -i -u "$SUDO_USER" bash -c 'source ~/.nvm/nvm.sh && which pm2')
     if [ -n "$PM2_PATH" ]; then
         ln -sf "$PM2_PATH" /usr/local/bin/pm2
         echo "✅ PM2 symlink created at /usr/local/bin/pm2"
