@@ -340,6 +340,47 @@ install_dependencies() {
         echo "☑️  PM2 is already installed (version: $pm2_version). Skipping."
     fi
 
+    # Konfigurasi PM2 PATH
+    echo "🔗 Mengkonfigurasi PM2 PATH..."
+    # Ganti baris ini:
+    # NPM_GLOBAL_BIN_PATH=$(sudo -u "$SUDO_USER" bash -c "npm config get prefix")/bin
+    # Dengan baris ini:
+    NPM_GLOBAL_BIN_PATH="/usr/local/lib/nodejs/$NODE_DIR/bin"
+    echo "ℹ️ Jalur global NPM yang terdeteksi untuk $SUDO_USER: $NPM_GLOBAL_BIN_PATH"
+
+    SHELL_PROFILE=""
+    if [ "$USER" = "root" ] || [ "$SUDO_USER" = "root" ]; then
+        HOME_DIR="/root"
+    else
+        HOME_DIR="/home/$SUDO_USER"
+    fi
+    
+    if [ -f "$HOME_DIR/.zshrc" ]; then
+        SHELL_PROFILE="$HOME_DIR/.zshrc"
+    elif [ -f "$HOME_DIR/.bashrc" ]; then
+        SHELL_PROFILE="$HOME_DIR/.bashrc"
+    else
+        touch "$HOME_DIR/.bashrc"
+        SHELL_PROFILE="$HOME_DIR/.bashrc"
+    fi
+
+    if [ -n "$SHELL_PROFILE" ]; then
+        if ! grep -q "$NPM_GLOBAL_BIN_PATH" "$SHELL_PROFILE" 2>/dev/null; then
+            echo "export PATH=\"\$PATH:$NPM_GLOBAL_BIN_PATH\"" | sudo tee -a "$SHELL_PROFILE" > /dev/null
+            export PATH="$PATH:$NPM_GLOBAL_BIN_PATH"
+        fi
+        if [ -f "$NPM_GLOBAL_BIN_PATH/pm2" ]; then
+            ln -sf "$NPM_GLOBAL_BIN_PATH/pm2" /usr/local/bin/pm2
+        fi
+    fi
+
+    if command -v pm2 &> /dev/null; then
+        echo "✅ PM2 dapat diakses dari baris perintah."
+        pm2 --version
+    else
+        echo "❌ Instalasi PM2 mungkin gagal."
+    fi
+
     echo ""
     echo "═══════════════════════════════════════════════"
     echo "🐍 CONFIGURING PYTHON VIRTUAL ENVIRONMENT"
