@@ -924,7 +924,7 @@ async def background_task_loop():
         except Exception as e:
             print(f"An unexpected error occurred in background task: {e}")
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
 
 @app.on_event("startup")
 async def startup_event():
