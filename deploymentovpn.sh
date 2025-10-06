@@ -32,11 +32,21 @@ OVPN_DIRS_STRING=""
 # --- Functions ---
 
 check_sudo() {
+    # Pastikan dijalankan sebagai root
     if [ "$EUID" -ne 0 ]; then
         echo "⛔ Please run this script with sudo: sudo $0"
         exit 1
     fi
-    echo "✅ Script is running with root privileges."
+
+    # Pastikan dijalankan via sudo (bukan langsung sebagai root)
+    if [ -z "$SUDO_COMMAND" ]; then
+        echo "⛔ This script must be run with 'sudo', even as root."
+        echo "   ✅ Correct: sudo $0"
+        echo "   ❌ Wrong:   $0"
+        exit 1
+    fi
+
+    echo "✅ Script is running with sudo (as root)."
 }
 
 get_user_input() {
