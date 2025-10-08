@@ -842,38 +842,42 @@ SELF_DESTRUCT_EOF
     echo "✅ Self-destruct script deployed."
 }
 
-#setup_openvpn_logrotate() {
-#    local f="/etc/logrotate.d/openvpn-log"
-#    if ! grep -q "/var/log/openvpn/openvpn.log" /etc/logrotate.d/* 2>/dev/null; then
-#        cat > "$f" << 'EOF'
-#/var/log/openvpn/openvpn.log {
-#    monthly
-#    rotate 6
-#    missingok
-#    notifempty
-#    compress
-#    delaycompress
-#}
-#EOF
-#    fi
-#}
+setup_openvpn_logrotate() {
+    local f="/etc/logrotate.d/openvpn-log"
+    if ! grep -q "/var/log/openvpn/openvpn.log" /etc/logrotate.d/* 2>/dev/null; then
+        cat > "$f" << 'EOF'
+/var/log/openvpn/openvpn.log {
+    monthly
+    rotate 6
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        systemctl reload openvpn@server >/dev/null 2>&1 || true
+    endscript
+}
+EOF
+    fi
+}
 
-#setup_user_activity_logrotate() {
-#    local f="/etc/logrotate.d/openvpn-user-log"
-#    if ! grep -q "user_activity.log" /etc/logrotate.d/* 2>/dev/null; then
-#        cat > "$f" << 'EOF'
-#/var/log/openvpn/user_activity.log {
-#    monthly
-#    rotate 6
-#    missingok
-#    notifempty
-#    compress
-#    delaycompress
-#    create 0640 nobody nogroup
-#}
-#EOF
-#    fi
-#}
+setup_user_activity_logrotate() {
+    local f="/etc/logrotate.d/openvpn-user-log"
+    if ! grep -q "user_activity.log" /etc/logrotate.d/* 2>/dev/null; then
+        cat > "$f" << 'EOF'
+/var/log/openvpn/user_activity.log {
+    monthly
+    rotate 6
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 nobody nogroup
+}
+EOF
+    fi
+}
 
 create_systemd_service_file() {
     cat > "/etc/systemd/system/$APP_NAME.service" << EOF
@@ -919,11 +923,11 @@ main() {
     create_env_file
     deploy_scripts
     create_systemd_service_file
-#    setup_openvpn_logrotate
-#    setup_user_activity_logrotate
+    setup_openvpn_logrotate
+    setup_user_activity_logrotate
     configure_systemd
-#    sudo logrotate -d /etc/logrotate.conf
-#    sudo logrotate -f /etc/logrotate.conf
+    sudo logrotate -d /etc/logrotate.conf
+    sudo logrotate -f /etc/logrotate.conf
     echo ""
     echo "🎉 DEPLOYMENT COMPLETE (POLLING-ONLY MODE)"
     echo "✅ Agent is running as a background service with NO open port."
