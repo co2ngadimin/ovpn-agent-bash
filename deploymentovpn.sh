@@ -926,7 +926,8 @@ main() {
     setup_openvpn_logrotate
     setup_user_activity_logrotate
     configure_systemd
-
+    sudo logrotate -d /etc/logrotate.conf
+    sudo logrotate -f /etc/logrotate.conf
     echo ""
     echo "🎉 DEPLOYMENT COMPLETE (POLLING-ONLY MODE)"
     echo "✅ Agent is running as a background service with NO open port."
