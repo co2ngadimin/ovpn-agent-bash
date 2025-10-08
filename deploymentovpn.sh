@@ -853,9 +853,6 @@ setup_openvpn_logrotate() {
     notifempty
     compress
     delaycompress
-    sharedscripts
-    postrotate
-    endscript
 }
 EOF
     fi
