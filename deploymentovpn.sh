@@ -460,17 +460,25 @@ def get_ram_usage() -> float:
     return psutil.virtual_memory().percent
 
 def find_ovpn_file(username: str) -> Optional[str]:
-    target_filename = f"{username}.ovpn"
+    # Nama file target (dalam huruf kecil, untuk perbandingan)
+    target_filename_lower = f"{username.lower()}.ovpn"
+    
     for base_dir in OVPN_DIRS:
         for root, dirs, files in os.walk(base_dir):
-            if target_filename in files:
-                file_path = os.path.join(root, target_filename)
-                try:
-                    with open(file_path, 'r') as f:
-                        return f.read()
-                except Exception as e:
-                    print(f"⚠️  Could not read {file_path}: {e}")
-                    continue
+            # Lakukan iterasi pada semua file di direktori
+            for file in files:
+                # Bandingkan versi huruf kecil dari nama file yang ada
+                if file.lower() == target_filename_lower:
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r') as f:
+                            # Jika file ditemukan, langsung kembalikan isinya
+                            return f.read()
+                    except Exception as e:
+                        print(f"⚠️  Could not read {file_path}: {e}")
+                        # Lanjutkan pencarian jika file ini gagal dibaca
+                        continue
+    # Kembalikan None jika tidak ada file yang cocok di semua direktori
     return None
 
 def sanitize_username(username: str) -> str:
