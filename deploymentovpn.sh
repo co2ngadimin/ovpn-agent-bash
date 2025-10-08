@@ -855,7 +855,6 @@ setup_openvpn_logrotate() {
     delaycompress
     sharedscripts
     postrotate
-        systemctl reload openvpn@server >/dev/null 2>&1 || true
     endscript
 }
 EOF
