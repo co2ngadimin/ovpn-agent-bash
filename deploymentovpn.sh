@@ -15,8 +15,13 @@ PYTHON_AGENT_SCRIPT_NAME="main.py"
 CLIENT_MANAGER_SCRIPT_NAME="openvpn-client-manager.sh"
 OPENVPN_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/Angristan/openvpn-install/master/openvpn-install.sh"
 OPENVPN_INSTALL_SCRIPT_PATH="/root/ubuntu-22.04-lts-vpn-server.sh"
-
-SUDO_USER=${SUDO_USER:-$(whoami)}
+if [ -n "$SUDO_USER" ]; then
+    # Jika dijalankan dengan 'sudo', gunakan user asli
+    AGENT_USER="$SUDO_USER"
+else
+    # Jika dijalankan langsung sebagai root, gunakan 'root'
+    AGENT_USER="root"
+fi
 BASE_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SCRIPT_DIR="$BASE_DIR/openvpn-agent"
 VENV_PATH="$SCRIPT_DIR/venv"
@@ -32,21 +37,11 @@ OVPN_DIRS_STRING=""
 # --- Functions ---
 
 check_sudo() {
-    # Pastikan dijalankan sebagai root
     if [ "$EUID" -ne 0 ]; then
-        echo "⛔ Please run this script with sudo: sudo $0"
+        echo "⛔ Please run this script with root privileges (e.g., sudo $0)"
         exit 1
     fi
-
-    # Pastikan dijalankan via sudo (bukan langsung sebagai root)
-    if [ -z "$SUDO_COMMAND" ]; then
-        echo "⛔ This script must be run with 'sudo', even as root."
-        echo "   ✅ Correct: sudo $0"
-        echo "   ❌ Wrong:   $0"
-        exit 1
-    fi
-
-    echo "✅ Script is running with sudo (as root)."
+    echo "✅ Script is running with root privileges."
 }
 
 get_user_input() {
@@ -370,7 +365,7 @@ SERVICE_NAME="$APP_NAME"
 METRICS_INTERVAL_SECONDS="$METRICS_INTERVAL"
 CPU_RAM_MONITORING_INTERVAL="$CPU_RAM_INTERVAL"
 EOF
-    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/.env"
+    chown "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR/.env"
     chmod 600 "$SCRIPT_DIR/.env"
     echo "✅ .env file created successfully."
 }
@@ -387,10 +382,10 @@ deploy_scripts() {
     touch "/var/log/openvpn/user_activity.log"
     chown nobody:nogroup "/var/log/openvpn/user_activity.log"
     chmod 640 "/var/log/openvpn/user_activity.log"
-    chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
+    chown -R "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR"
 
     echo "🐍 Writing Python agent script to $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
-    cat << '_PYTHON_SCRIPT_EOF_' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" > /dev/null
+    cat << '_PYTHON_SCRIPT_EOF_' | tee "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" > /dev/null
 #!/usr/bin/env python3
 # main.py (Polling-Only Agent - No Web Server)
 import os
@@ -399,6 +394,7 @@ import time
 import requests
 import hashlib
 import re
+import glob  # <-- Import glob module
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
 from dotenv import load_dotenv
@@ -440,6 +436,22 @@ if not all([AGENT_API_KEY, SERVER_ID, DASHBOARD_API_URL]):
 last_vpn_profiles_checksum = None
 last_activity_log_checksum = None
 last_openvpn_log_checksum = None
+
+# === [CHANGE 1] Add new helper function to read rotated log files ===
+def get_rotated_log_files(base_path: str) -> List[str]:
+    """Finds all rotated log files for a given base path and sorts them from oldest to newest."""
+    pattern = f"{base_path}*"
+    files = glob.glob(pattern)
+    
+    def sort_key(filepath: str) -> int:
+        # Sort files from oldest (e.g., .log.5) to newest (.log)
+        parts = filepath.rsplit('.', 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return -int(parts[1])  # Reverse numeric order (5, 4, 3...)
+        return 0  # Main log file (.log) is the newest
+        
+    files.sort(key=sort_key)
+    return files
 
 def get_cpu_usage() -> float:
     return psutil.cpu_percent(interval=0.1)
@@ -559,18 +571,25 @@ def get_openvpn_active_users_from_status_log() -> List[str]:
     except:
         return []
 
+# === [CHANGE 2] Modify parse_activity_logs function ===
 def parse_activity_logs() -> Tuple[List[Dict], str]:
     logs = []
     raw = ""
-    for path in [OVPN_ACTIVITY_LOG_PATH, f"{OVPN_ACTIVITY_LOG_PATH}.1"]:
+    # Use the new helper function to get all log files
+    log_files = get_rotated_log_files(OVPN_ACTIVITY_LOG_PATH)
+    print(f"Found activity log files to parse: {log_files}")
+
+    for path in log_files:
         if os.path.exists(path):
             try:
-                with open(path, 'r') as f:
+                with open(path, 'r', errors='ignore') as f:
                     raw += f.read()
-            except:
-                pass
+            except Exception as e:
+                print(f"Could not read {path}: {e}")
+    
     if not raw:
         return [], ""
+    
     checksum = hashlib.md5(raw.encode('utf-8')).hexdigest()
     for line in raw.strip().split('\n'):
         parts = line.strip().split(',')
@@ -600,18 +619,25 @@ def parse_activity_logs() -> Tuple[List[Dict], str]:
             continue
     return logs, checksum
 
+# === [CHANGE 3] Modify parse_openvpn_logs function ===
 def parse_openvpn_logs() -> Tuple[List[Dict], str]:
     logs = []
     raw = ""
-    for path in [OPENVPN_LOG_PATH, f"{OPENVPN_LOG_PATH}.1"]:
+    # Use the new helper function to get all log files
+    log_files = get_rotated_log_files(OPENVPN_LOG_PATH)
+    print(f"Found system log files to parse: {log_files}")
+
+    for path in log_files:
         if os.path.exists(path):
             try:
                 with open(path, 'r', errors='ignore') as f:
                     raw += f.read()
-            except:
-                pass
+            except Exception as e:
+                print(f"Could not read {path}: {e}")
+
     if not raw:
         return [], ""
+        
     checksum = hashlib.md5(raw.encode('utf-8')).hexdigest()
     pattern = re.compile(r"^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<message>.*)")
     for line in raw.strip().split('\n'):
@@ -639,6 +665,25 @@ def run_command(cmd: List[str]) -> None:
     import subprocess
     subprocess.run(cmd, check=True)
 
+# Add the new sync_profiles function here
+def sync_profiles(headers: Dict[str, str]) -> None:
+    """Parses index.txt and syncs profiles if changes are detected."""
+    global last_vpn_profiles_checksum
+    try:
+        profiles, prof_checksum = parse_index_txt()
+        # Only send if checksum exists and differs from the last one
+        if prof_checksum and prof_checksum != last_vpn_profiles_checksum:
+            print("Change detected, syncing VPN profiles...")
+            requests.post(
+                f"{DASHBOARD_API_URL}/agent/sync-profiles",
+                json={"serverId": SERVER_ID, "vpnProfiles": profiles},
+                headers=headers,
+                timeout=15
+            )
+            last_vpn_profiles_checksum = prof_checksum
+    except Exception as e:
+        print(f"[ERROR] Failed during profile sync: {e}")
+
 def main_loop():
     global last_vpn_profiles_checksum, last_activity_log_checksum, last_openvpn_log_checksum
     headers = {"Authorization": f"Bearer {AGENT_API_KEY}"}
@@ -654,11 +699,8 @@ def main_loop():
                 payload["ramUsage"] = get_ram_usage()
             requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=payload, headers=headers, timeout=10)
 
-            # 2. Sync profiles
-            profiles, prof_checksum = parse_index_txt()
-            if prof_checksum != last_vpn_profiles_checksum:
-                requests.post(f"{DASHBOARD_API_URL}/agent/sync-profiles", json={"serverId": SERVER_ID, "vpnProfiles": profiles}, headers=headers, timeout=10)
-                last_vpn_profiles_checksum = prof_checksum
+            # 2. Sync profiles (now calling the new function)
+            sync_profiles(headers)
 
             # 3. Sync activity logs
             act_logs, act_checksum = parse_activity_logs()
@@ -682,15 +724,18 @@ def main_loop():
                     details = action.get('details')
                     result = {"status": "success", "message": "", "ovpnFileContent": None}
                     
+                    action_performed = False  # Flag to indicate if create/revoke action was performed
                     if action_type == "CREATE_USER":
                         username = sanitize_username(details)
                         run_command(["sudo", SCRIPT_PATH, "create", username])
                         result["ovpnFileContent"] = find_ovpn_file(username)
                         result["message"] = f"User {username} created."
+                        action_performed = True
                     elif action_type in ["REVOKE_USER", "DELETE_USER"]:
                         username = sanitize_username(details)
                         run_command(["sudo", SCRIPT_PATH, "revoke", username])
                         result["message"] = f"User {username} revoked."
+                        action_performed = True
                     elif action_type == "DECOMMISSION_AGENT":
                         try:
                             requests.post(f"{DASHBOARD_API_URL}/agent/decommission-complete", json={"serverId": SERVER_ID}, headers=headers, timeout=5)
@@ -705,9 +750,17 @@ def main_loop():
                         print("💀 Shutting down for self-destruct...")
                         sys.exit(0)
                     
+                    # Send action result to dashboard
                     if action_type != "DECOMMISSION_AGENT":
                         requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": action_id, **result}, headers=headers, timeout=10)
+                    
+                    # === MAIN CHANGE: TRIGGER IMMEDIATE SYNC IF NEEDED ===
+                    if action_performed:
+                        print(f"Action '{action_type}' completed. Triggering immediate profile sync.")
+                        time.sleep(2)
+                        sync_profiles(headers)
+
                 except Exception as e:
                     requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                         json={"actionLogId": action.get('id', 'N/A'), "status": "failed", "message": str(e)},
@@ -721,11 +774,11 @@ if __name__ == "__main__":
     main_loop()
 _PYTHON_SCRIPT_EOF_
     chmod +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
-    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
+    chown "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
     echo "✅ Python agent script deployed successfully."
 
     echo "⚙️  Writing client manager script..."
-    cat << 'CLIENT_MANAGER_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
+    cat << 'CLIENT_MANAGER_EOF' | tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
 #!/bin/bash
 OPENVPN_INSTALL_SCRIPT="/root/ubuntu-22.04-lts-vpn-server.sh"
 create_client() {
@@ -735,6 +788,7 @@ create_client() {
         exit 1
     fi
     printf "1\n%s\n1\n" "$username" | sudo "$OPENVPN_INSTALL_SCRIPT"
+    sleep 1 # <-- ADD THIS DELAY
 }
 revoke_client() {
     local username="$1"
@@ -747,6 +801,7 @@ revoke_client() {
         expect "Select one client*" { send "$num\r" }
         expect eof
 EOF
+    sleep 1 # <-- ADD THIS DELAY
 }
 case "$1" in
     create) create_client "$2" ;;
@@ -755,11 +810,11 @@ case "$1" in
 esac
 CLIENT_MANAGER_EOF
     chmod +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
-    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
+    chown "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
     echo "✅ Client manager script deployed."
 
     echo "🗑️  Writing self-destruct script..."
-    cat << 'SELF_DESTRUCT_EOF' | sudo -u "$SUDO_USER" tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
+    cat << 'SELF_DESTRUCT_EOF' | tee "$SCRIPT_DIR/self-destruct.sh" > /dev/null
 #!/bin/bash
 set -e
 if [ "$EUID" -ne 0 ]; then exit 1; fi
@@ -775,7 +830,7 @@ rm -rf "$AGENT_DIR"
 echo "✅ Self-destruct complete."
 SELF_DESTRUCT_EOF
     chmod +x "$SCRIPT_DIR/self-destruct.sh"
-    chown "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR/self-destruct.sh"
+    chown "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR/self-destruct.sh"
     echo "✅ Self-destruct script deployed."
 }
 
@@ -824,7 +879,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=$SUDO_USER
+User=$AGENT_USER
 WorkingDirectory=$SCRIPT_DIR
 ExecStart=$VENV_PATH/bin/python3 $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME
 Restart=always
@@ -854,7 +909,7 @@ main() {
     cleanup_old_pm2_installation
     check_and_install_openvpn
     mkdir -p "$SCRIPT_DIR"
-    chown -R "$SUDO_USER":"$SUDO_USER" "$SCRIPT_DIR"
+    chown -R "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR"
     if ! find_easy_rsa_path; then exit 1; fi
     install_dependencies
     create_env_file
