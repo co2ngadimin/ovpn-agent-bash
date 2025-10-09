@@ -47,7 +47,8 @@ check_sudo() {
 get_user_input() {
     echo ""
     while [ -z "$APP_NAME" ]; do
-        read -p "🏷️  Enter the Service Name for systemd (e.g., vpn-agent): " APP_NAME
+        read -p "🏷️  Enter the Service Name for systemd (Default: openvpn-agent): " APP_NAME
+        APP_NAME=${APP_NAME:-openvpn-agent}
         [ -z "$APP_NAME" ] && echo "⛔ Service name cannot be empty."
     done
     echo ""
