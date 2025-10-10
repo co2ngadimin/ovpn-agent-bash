@@ -314,7 +314,6 @@ install_dependencies() {
     echo "📦 Updating package lists..."
     apt-get update 
     echo "📦 Installing system dependencies..."
-    # << MERGED: Removed 'expect' as it's no longer needed for the simplified manager
     apt-get install -y python3 python3-pip python3-venv dos2unix at
     dos2unix "$0" >/dev/null 2>&1
     echo ""
@@ -447,9 +446,11 @@ last_openvpn_log_checksum = None
 
 # << KEPT FROM SCRIPT 1: Feature to read rotated logs
 def get_rotated_log_files(base_path: str) -> List[str]:
-    """Finds all rotated log files for a given base path and sorts them from oldest to newest."""
+    """Finds all rotated log files for a given base path (ignoring .gz files) and sorts them."""
     pattern = f"{base_path}*"
-    files = glob.glob(pattern)
+    # MODIFIED: Get all files, then filter out any that end with .gz
+    all_files = glob.glob(pattern)
+    files = [f for f in all_files if not f.endswith('.gz')]
     
     def sort_key(filepath: str) -> int:
         parts = filepath.rsplit('.', 1)
@@ -670,6 +671,7 @@ def sync_profiles(headers: Dict[str, str]) -> None:
         print(f"[ERROR] Failed during profile sync: {e}")
 
 # === MAIN AGENT LOOP ===
+# === MAIN AGENT LOOP ===
 def main_loop():
     global last_activity_log_checksum, last_openvpn_log_checksum
     headers = {"Authorization": f"Bearer {AGENT_API_KEY}", "Content-Type": "application/json"}
@@ -690,20 +692,32 @@ def main_loop():
             # 2. Sync Full Profiles (if changed)
             sync_profiles(headers)
 
-            # 3. Stream Activity Logs (if changed)
+            # 3. Stream Activity Logs (if changed) - SIMPLIFIED LOGIC
             act_checksum = get_streamed_checksum(OVPN_ACTIVITY_LOG_PATH)
             if act_checksum and act_checksum != last_activity_log_checksum:
-                print("Change detected, streaming activity logs...")
-                log_gen = stream_json_payload(generate_activity_logs(), "activityLogs")
-                requests.post(f"{DASHBOARD_API_URL}/agent/report-activity-logs", data=log_gen, headers=headers, timeout=30)
+                # Generate all logs from non-gzipped files into a list
+                activity_logs = list(generate_activity_logs())
+                # Only send a request if the list is not empty
+                if activity_logs:
+                    print(f"Change detected, sending {len(activity_logs)} activity logs...")
+                    payload = {"serverId": SERVER_ID, "activityLogs": activity_logs}
+                    requests.post(f"{DASHBOARD_API_URL}/agent/report-activity-logs", json=payload, headers=headers, timeout=30)
+                else:
+                    print("No new activity log entries to send.")
                 last_activity_log_checksum = act_checksum
 
-            # 4. Stream System Logs (if changed)
+            # 4. Stream System Logs (if changed) - SIMPLIFIED LOGIC
             ovpn_checksum = get_streamed_checksum(OPENVPN_LOG_PATH)
             if ovpn_checksum and ovpn_checksum != last_openvpn_log_checksum:
-                print("Change detected, streaming system logs...")
-                log_gen = stream_json_payload(generate_openvpn_logs(), "openvpnLogs")
-                requests.post(f"{DASHBOARD_API_URL}/agent/report-openvpn-logs", data=log_gen, headers=headers, timeout=30)
+                # Generate all logs from non-gzipped files into a list
+                openvpn_logs = list(generate_openvpn_logs())
+                # Only send a request if the list is not empty
+                if openvpn_logs:
+                    print(f"Change detected, sending {len(openvpn_logs)} system logs...")
+                    payload = {"serverId": SERVER_ID, "openvpnLogs": openvpn_logs}
+                    requests.post(f"{DASHBOARD_API_URL}/agent/report-openvpn-logs", json=payload, headers=headers, timeout=30)
+                else:
+                    print("No new system log entries to send.")
                 last_openvpn_log_checksum = ovpn_checksum
             
             # 5. Process Actions from Dashboard
@@ -726,7 +740,6 @@ def main_loop():
                         run_command(["sudo", SCRIPT_PATH, "revoke", username])
                         result["message"] = f"User {username} revoked."
                         action_performed = True
-                    # << KEPT FROM SCRIPT 1: Decommission feature
                     elif action_type == "DECOMMISSION_AGENT":
                         try:
                             requests.post(f"{DASHBOARD_API_URL}/agent/decommission-complete", json={"serverId": SERVER_ID}, headers=headers, timeout=5)
@@ -743,7 +756,6 @@ def main_loop():
                         requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": action_id, **result}, headers=headers, timeout=10)
                     
-                    # << KEPT FROM SCRIPT 1: Immediate resync logic
                     if action_performed:
                         print(f"Action '{action_type}' completed. Triggering immediate profile sync.")
                         time.sleep(2)
