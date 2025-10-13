@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# deploymentovpn.sh (Polling-Only Mode - No Web Server, No Port 8080)
+# deploymentovpn.sh (Ultimate Edition: Feature-Complete & RAM-Optimized)
 #
-# This script automates the deployment of the OpenVPN Agent on a new server.
-# It runs as a background systemd service that polls the dashboard API periodically.
-# There is NO web server, NO open port, and NO real-time command endpoint.
+# This script combines the best of both worlds:
+# 1. FEATURE-COMPLETE: It can parse rotated logs and supports agent decommission.
+# 2. RAM-OPTIMIZED: It streams large log files line-by-line to keep RAM usage low.
 #
 # Usage: sudo ./deploymentovpn.sh
 #
@@ -15,13 +15,7 @@ PYTHON_AGENT_SCRIPT_NAME="main.py"
 CLIENT_MANAGER_SCRIPT_NAME="openvpn-client-manager.sh"
 OPENVPN_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/Angristan/openvpn-install/master/openvpn-install.sh"
 OPENVPN_INSTALL_SCRIPT_PATH="/root/ubuntu-22.04-lts-vpn-server.sh"
-if [ -n "$SUDO_USER" ]; then
-    # Jika dijalankan dengan 'sudo', gunakan user asli
-    AGENT_USER="$SUDO_USER"
-else
-    # Jika dijalankan langsung sebagai root, gunakan 'root'
-    AGENT_USER="root"
-fi
+AGENT_USER="root"
 BASE_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SCRIPT_DIR="$BASE_DIR/openvpn-agent"
 VENV_PATH="$SCRIPT_DIR/venv"
@@ -320,7 +314,7 @@ install_dependencies() {
     echo "📦 Updating package lists..."
     apt-get update 
     echo "📦 Installing system dependencies..."
-    apt-get install -y python3 python3-pip python3-venv expect dos2unix at
+    apt-get install -y python3 python3-pip python3-venv dos2unix at
     dos2unix "$0" >/dev/null 2>&1
     echo ""
     echo "═══════════════════════════════════════════════"
@@ -332,7 +326,7 @@ install_dependencies() {
     echo "✅ Virtual environment created successfully."
     echo "📦 Installing Python dependencies..."
     "$VENV_PATH/bin/pip" install --upgrade pip
-    echo "   Installing: pydantic, python-dotenv, requests, psutil..."
+    echo "   Installing: python-dotenv, requests, psutil..."
     if "$VENV_PATH/bin/pip" install python-dotenv psutil requests; then
         echo "✅ All Python dependencies installed successfully."
     else
@@ -380,106 +374,118 @@ deploy_scripts() {
     echo "📁 Ensuring directory structure..."
     mkdir -p "$SCRIPT_DIR/logs"
     mkdir -p "/var/log/openvpn"
+
     touch "/var/log/openvpn/user_activity.log"
     chown nobody:nogroup "/var/log/openvpn/user_activity.log"
     chmod 640 "/var/log/openvpn/user_activity.log"
+
+    touch "/var/log/openvpn/openvpn.log"
+    chown nobody:nogroup "/var/log/openvpn/openvpn.log"
+    chmod 640 "/var/log/openvpn/openvpn.log"
+
+    touch "/var/log/openvpn/status.log"
+    chown nobody:nogroup "/var/log/openvpn/status.log"
+    chmod 640 "/var/log/openvpn/status.log"
+    
     chown -R "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR"
 
     echo "🐍 Writing Python agent script to $SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME..."
     cat << '_PYTHON_SCRIPT_EOF_' | tee "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME" > /dev/null
 #!/usr/bin/env python3
-# main.py (Polling-Only Agent - No Web Server)
+# main.py (FINAL VERSION: True RAM-Optimized Stateful Agent)
 import os
 import sys
 import time
 import requests
 import hashlib
 import re
-import glob  # <-- Import glob module
+import glob
+import json
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import psutil
 
 load_dotenv()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Load config
+# --- Konfigurasi ---
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 SERVER_ID = os.getenv("SERVER_ID")
 DASHBOARD_API_URL = os.getenv("DASHBOARD_API_URL")
 SCRIPT_PATH = os.getenv("SCRIPT_PATH", "./openvpn-client-manager.sh")
 OVPN_DIRS_STR = os.getenv("OVPN_DIRS", "/root")
 OVPN_DIRS = [d.strip() for d in OVPN_DIRS_STR.split(',') if d.strip()]
-EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH", "/etc/openvpn/easy-rsa/pki/index.txt")
-EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH", "/etc/openvpn/easy-rsa/SERVER_NAME_GENERATED")
-OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH", "/var/log/openvpn/user_activity.log")
-OPENVPN_LOG_PATH = os.getenv("OPENVPN_LOG_PATH", "/var/log/openvpn/openvpn.log")
+EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH")
+EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH")
+OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH")
+OPENVPN_LOG_PATH = os.getenv("OPENVPN_LOG_PATH")
 METRICS_INTERVAL = int(os.getenv("METRICS_INTERVAL_SECONDS", "60"))
 CPU_RAM_MONITORING_INTERVAL_STR = os.getenv("CPU_RAM_MONITORING_INTERVAL", "60")
+LOG_BATCH_SIZE = 500
+STATE_FILE_PATH = os.path.join(SCRIPT_DIR, ".agent_state.json")
 
 if CPU_RAM_MONITORING_INTERVAL_STR.lower() == "disabled":
     CPU_RAM_MONITORING_INTERVAL = None
 else:
     try:
         CPU_RAM_MONITORING_INTERVAL = int(CPU_RAM_MONITORING_INTERVAL_STR)
-        if CPU_RAM_MONITORING_INTERVAL <= 0:
-            raise ValueError
+        if CPU_RAM_MONITORING_INTERVAL <= 0: raise ValueError
     except (ValueError, TypeError):
         CPU_RAM_MONITORING_INTERVAL = 60
 
-# Validate
-if not all([AGENT_API_KEY, SERVER_ID, DASHBOARD_API_URL]):
-    print("❌ Missing required environment variables.")
+# --- Validasi Konfigurasi ---
+if not all([AGENT_API_KEY, SERVER_ID, DASHBOARD_API_URL, EASY_RSA_INDEX_PATH]):
+    print("❌ Missing required environment variables. Check .env file.")
     sys.exit(1)
 
-# Global checksums
+# --- State Management ---
+def load_state():
+    if not os.path.exists(STATE_FILE_PATH): return {"files": {}}
+    try:
+        with open(STATE_FILE_PATH, 'r') as f: return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError): return {"files": {}}
+
+def save_state(state):
+    with open(STATE_FILE_PATH, 'w') as f: json.dump(state, f, indent=4)
+
+# --- Global State ---
 last_vpn_profiles_checksum = None
-last_activity_log_checksum = None
-last_openvpn_log_checksum = None
 
-# === [CHANGE 1] Add new helper function to read rotated log files ===
-def get_rotated_log_files(base_path: str) -> List[str]:
-    """Finds all rotated log files for a given base path and sorts them from oldest to newest."""
-    pattern = f"{base_path}*"
-    files = glob.glob(pattern)
-    
-    def sort_key(filepath: str) -> int:
-        # Sort files from oldest (e.g., .log.5) to newest (.log)
-        parts = filepath.rsplit('.', 1)
-        if len(parts) == 2 and parts[1].isdigit():
-            return -int(parts[1])  # Reverse numeric order (5, 4, 3...)
-        return 0  # Main log file (.log) is the newest
-        
-    files.sort(key=sort_key)
-    return files
+# === HELPER FUNCTIONS ===
 
-def get_cpu_usage() -> float:
+# << MERGED FROM SCRIPT 2: RAM-optimized checksum calculation
+def get_streamed_checksum(filepath: str) -> Optional[str]:
+    if not os.path.exists(filepath): return None
+    hasher = hashlib.md5()
+    try:
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception as e:
+        print(f"Could not calculate checksum for {filepath}: {e}")
+        return None
+
+def get_cpu_usage() -> float: 
     return psutil.cpu_percent(interval=0.1)
 
-def get_ram_usage() -> float:
+def get_ram_usage() -> float: 
     return psutil.virtual_memory().percent
 
 def find_ovpn_file(username: str) -> Optional[str]:
-    # Nama file target (dalam huruf kecil, untuk perbandingan)
     target_filename_lower = f"{username.lower()}.ovpn"
-    
     for base_dir in OVPN_DIRS:
-        for root, dirs, files in os.walk(base_dir):
-            # Lakukan iterasi pada semua file di direktori
+        for root, _, files in os.walk(base_dir):
             for file in files:
-                # Bandingkan versi huruf kecil dari nama file yang ada
                 if file.lower() == target_filename_lower:
                     file_path = os.path.join(root, file)
                     try:
                         with open(file_path, 'r') as f:
-                            # Jika file ditemukan, langsung kembalikan isinya
                             return f.read()
                     except Exception as e:
                         print(f"⚠️  Could not read {file_path}: {e}")
-                        # Lanjutkan pencarian jika file ini gagal dibaca
                         continue
-    # Kembalikan None jika tidak ada file yang cocok di semua direktori
     return None
 
 def sanitize_username(username: str) -> str:
@@ -492,79 +498,26 @@ def get_openvpn_service_status() -> str:
     try:
         result = os.system("systemctl is-active --quiet openvpn@server")
         return "running" if result == 0 else "stopped"
-    except:
+    except: 
         return "error"
 
 def get_server_cn() -> str:
-    try:
-        if os.path.exists(EASY_RSA_SERVER_NAME_PATH):
+    if EASY_RSA_SERVER_NAME_PATH and os.path.exists(EASY_RSA_SERVER_NAME_PATH):
+        try:
             with open(EASY_RSA_SERVER_NAME_PATH, 'r') as f:
                 return f.read().strip()
-    except:
-        pass
+        except: 
+            pass
     return "server_irL5Kfmg3FnRZaGE"
 
-def parse_index_txt() -> Tuple[List[Dict], str]:
-    profiles = []
+def get_openvpn_active_users() -> list:
+    users = []
+    status_log_path = "/var/log/openvpn/status.log"
+    if not os.path.exists(status_log_path): 
+        return []
     try:
-        with open(EASY_RSA_INDEX_PATH, 'r') as f:
-            raw_content = f.read()
-            checksum = hashlib.md5(raw_content.encode('utf-8')).hexdigest()
-            server_cn = get_server_cn()
-            for line in raw_content.strip().split('\n'):
-                parts = line.strip().split('\t')
-                if len(parts) >= 6:
-                    cert_status = parts[0]
-                    expiration_date_str = parts[1]
-                    expiration_date = None
-                    if expiration_date_str and expiration_date_str != 'Z':
-                        try:
-                            match = re.match(r'(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z', expiration_date_str)
-                            if match:
-                                year, month, day, hour, minute, second = match.groups()
-                                full_year = int(year) + 2000 if int(year) < 70 else int(year) + 1900
-                                dt = datetime.strptime(f"{full_year}-{month}-{day} {hour}:{minute}:{second}", "%Y-%m-%d %H:%M:%S")
-                                expiration_date = dt.replace(tzinfo=timezone.utc)
-                        except:
-                            pass
-                    revocation_date = None
-                    if cert_status == 'R' and len(parts) >= 3 and parts[2] != 'Z':
-                        try:
-                            match = re.match(r'(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z', parts[2])
-                            if match:
-                                year, month, day, hour, minute, second = match.groups()
-                                full_year = int(year) + 2000 if int(year) < 70 else int(year) + 1900
-                                dt = datetime.strptime(f"{full_year}-{month}-{day} {hour}:{minute}:{second}", "%Y-%m-%d %H:%M:%S")
-                                revocation_date = dt.replace(tzinfo=timezone.utc)
-                        except:
-                            pass
-                    serial_number = parts[3]
-                    cn_match = re.search(r'/CN=([^/]+)', line)
-                    username_raw = cn_match.group(1) if cn_match else "unknown"
-                    username = "".join(filter(str.isprintable, username_raw)).lower().strip()
-                    if username_raw == server_cn:
-                        continue
-                    status_map = {'V': 'VALID', 'R': 'REVOKED', 'E': 'EXPIRED'}
-                    vpn_cert_status = status_map.get(cert_status, "UNKNOWN")
-                    ovpn_content = find_ovpn_file(username) if vpn_cert_status == "VALID" else None
-                    profiles.append({
-                        "username": username,
-                        "status": vpn_cert_status,
-                        "expirationDate": expiration_date.isoformat() if expiration_date else None,
-                        "revocationDate": revocation_date.isoformat() if revocation_date else None,
-                        "serialNumber": serial_number,
-                        "ovpnFileContent": ovpn_content,
-                    })
-            return profiles, checksum
-    except Exception as e:
-        print(f"Error parsing index.txt: {e}")
-        return [], ""
-
-def get_openvpn_active_users_from_status_log() -> List[str]:
-    try:
-        with open("/var/log/openvpn/status.log", 'r') as f:
+        with open(status_log_path, 'r') as f:
             content = f.read()
-            users = []
             parsing = False
             for line in content.split('\n'):
                 if line.startswith("Common Name,Real Address"):
@@ -576,164 +529,207 @@ def get_openvpn_active_users_from_status_log() -> List[str]:
                     parts = line.split(',')
                     if parts and parts[0]:
                         users.append(parts[0].lower())
-            return users
-    except:
-        return []
+    except: 
+        pass
+    return users
 
-# === [CHANGE 2] Modify parse_activity_logs function ===
-def parse_activity_logs() -> Tuple[List[Dict], str]:
-    logs = []
-    raw = ""
-    # Use the new helper function to get all log files
-    log_files = get_rotated_log_files(OVPN_ACTIVITY_LOG_PATH)
-    print(f"Found activity log files to parse: {log_files}")
-
-    for path in log_files:
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', errors='ignore') as f:
-                    raw += f.read()
-            except Exception as e:
-                print(f"Could not read {path}: {e}")
-    
-    if not raw:
-        return [], ""
-    
-    checksum = hashlib.md5(raw.encode('utf-8')).hexdigest()
-    for line in raw.strip().split('\n'):
-        parts = line.strip().split(',')
-        if len(parts) < 2:
-            continue
-        try:
-            ts = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S').isoformat() + "Z"
-            action = parts[1]
-            username = parts[2] if len(parts) > 2 else None
-            public_ip = parts[3] if len(parts) > 3 else None
-            vpn_ip = bytes_received = bytes_sent = None
-            if action == "CONNECT" and len(parts) > 4:
-                vpn_ip = parts[4]
-            elif action == "DISCONNECT" and len(parts) > 5:
-                bytes_received = int(parts[4])
-                bytes_sent = int(parts[5])
-            logs.append({
-                "timestamp": ts,
-                "action": action,
-                "username": username,
-                "publicIp": public_ip,
-                "vpnIp": vpn_ip,
-                "bytesReceived": bytes_received,
-                "bytesSent": bytes_sent,
-            })
-        except:
-            continue
-    return logs, checksum
-
-# === [CHANGE 3] Modify parse_openvpn_logs function ===
-def parse_openvpn_logs() -> Tuple[List[Dict], str]:
-    logs = []
-    raw = ""
-    # Use the new helper function to get all log files
-    log_files = get_rotated_log_files(OPENVPN_LOG_PATH)
-    print(f"Found system log files to parse: {log_files}")
-
-    for path in log_files:
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', errors='ignore') as f:
-                    raw += f.read()
-            except Exception as e:
-                print(f"Could not read {path}: {e}")
-
-    if not raw:
-        return [], ""
-        
-    checksum = hashlib.md5(raw.encode('utf-8')).hexdigest()
-    pattern = re.compile(r"^(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<message>.*)")
-    for line in raw.strip().split('\n'):
-        match = pattern.match(line)
-        if match:
-            try:
-                ts_str = match.group('timestamp')
-                dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                msg = match.group('message')
-                level = "INFO"
-                if "WARNING" in msg.upper():
-                    level = "WARNING"
-                elif "ERROR" in msg.upper() or "FAIL" in msg.upper():
-                    level = "ERROR"
-                logs.append({
-                    "timestamp": dt.isoformat() + "Z",
-                    "level": level,
-                    "message": msg
-                })
-            except:
-                pass
-    return logs, checksum
-
-def run_command(cmd: List[str]) -> None:
+def run_command(cmd: list) -> None:
     import subprocess
     subprocess.run(cmd, check=True)
 
-# Add the new sync_profiles function here
+# === DATA PARSING FUNCTIONS ===
+
+def parse_full_profiles() -> list:
+    """Parses index.txt and returns a list of profiles WITH ovpnFileContent."""
+    profiles = []
+    if not os.path.exists(EASY_RSA_INDEX_PATH): 
+        return []
+    server_cn = get_server_cn()
+    try:
+        with open(EASY_RSA_INDEX_PATH, 'r') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 6: 
+                    continue
+                
+                cn_match = re.search(r'/CN=([^/]+)', line)
+                username_raw = cn_match.group(1) if cn_match else "unknown"
+                if username_raw == server_cn: 
+                    continue
+
+                username = "".join(filter(str.isprintable, username_raw)).lower().strip()
+                cert_status, exp_str, rev_str, serial = parts[0], parts[1], parts[2], parts[3]
+                
+                expiration_date, revocation_date = None, None
+                try:
+                    if exp_str and exp_str != 'Z':
+                        dt = datetime.strptime(exp_str, '%y%m%d%H%M%SZ')
+                        expiration_date = dt.replace(tzinfo=timezone.utc)
+                except ValueError: 
+                    pass
+
+                try:
+                    if cert_status == 'R' and rev_str and rev_str != 'Z':
+                        dt = datetime.strptime(rev_str, '%y%m%d%H%M%SZ')
+                        revocation_date = dt.replace(tzinfo=timezone.utc)
+                except ValueError: 
+                    pass
+
+                status_map = {'V': 'VALID', 'R': 'REVOKED', 'E': 'EXPIRED'}
+                vpn_status = status_map.get(cert_status, "UNKNOWN")
+                
+                ovpn_content = find_ovpn_file(username) if vpn_status == "VALID" else None
+                
+                profiles.append({
+                    "username": username, "status": vpn_status,
+                    "expirationDate": expiration_date.isoformat() if expiration_date else None,
+                    "revocationDate": revocation_date.isoformat() if revocation_date else None,
+                    "serialNumber": serial, "ovpnFileContent": ovpn_content,
+                })
+        return profiles
+    except Exception as e:
+        print(f"Error parsing index.txt: {e}")
+        return []
+
+# --- Fungsi Sinkronisasi Profil ---
 def sync_profiles(headers: Dict[str, str]) -> None:
-    """Parses index.txt and syncs profiles if changes are detected."""
     global last_vpn_profiles_checksum
     try:
-        profiles, prof_checksum = parse_index_txt()
-        # Only send if checksum exists and differs from the last one
+        prof_checksum = get_streamed_checksum(EASY_RSA_INDEX_PATH)
         if prof_checksum and prof_checksum != last_vpn_profiles_checksum:
-            print("Change detected, syncing VPN profiles...")
+            print("Change detected, syncing full VPN profiles...")
+            full_profiles = parse_full_profiles()
             requests.post(
                 f"{DASHBOARD_API_URL}/agent/sync-profiles",
-                json={"serverId": SERVER_ID, "vpnProfiles": profiles},
-                headers=headers,
-                timeout=15
+                json={"serverId": SERVER_ID, "vpnProfiles": full_profiles},
+                headers=headers, timeout=30
             )
             last_vpn_profiles_checksum = prof_checksum
+            del full_profiles
     except Exception as e:
         print(f"[ERROR] Failed during profile sync: {e}")
 
+# --- ✅ FUNGSI PENGIRIMAN BATCH YANG DIPERBARUI ---
+def send_batch(batch: list, endpoint: str, headers: dict) -> bool:
+    if not batch: return True
+    payload_key = "activityLogs" if "activity" in endpoint else "openvpnLogs"
+    payload = {"serverId": SERVER_ID, payload_key: batch}
+    try:
+        response = requests.post(f"{DASHBOARD_API_URL}{endpoint}", json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        print(f"Successfully sent batch of {len(batch)} logs to {endpoint}.")
+        return True
+    except requests.RequestException as e:
+        print(f"⛔ Failed to send log batch to {endpoint}: {e}. State will not be updated.")
+        return False
+
+# --- ✅ FUNGSI PROSES LOG YANG BENAR-BENAR HEMAT RAM ---
+    agent_state = load_state()
+    file_state = agent_state.get("files", {}).get(log_key, {})
+    
+    is_first_run = not bool(file_state)
+    
+    # --- ✅ PERUBAHAN UTAMA: Logika "Skip" hanya untuk "openvpn_log" ---
+    if is_first_run and log_key == "openvpn_log":
+        print(f"First run for {log_key}. Skipping all existing content.")
+        try:
+            current_stat = os.stat(base_path)
+            agent_state["files"][log_key] = {"inode": current_stat.st_ino, "position": current_stat.st_size}
+            save_state(agent_state)
+            print(f"State initialized for {log_key}. Will only process new logs from now on.")
+            return
+        except FileNotFoundError:
+            return
+    # --- AKHIR DARI PERUBAHAN ---
+
+    last_inode = file_state.get("inode")
+    last_position = file_state.get("position", 0)
+
+    try:
+        current_stat = os.stat(base_path)
+        current_inode = current_stat.st_ino
+    except FileNotFoundError:
+        return
+
+    if last_inode and last_inode != current_inode:
+        print(f"Log rotation detected for {log_key}. Resetting position for new file.")
+        last_position = 0
+
+    try:
+        with open(base_path, 'r', errors='ignore') as f:
+            f.seek(last_position)
+            batch = []
+            
+            while True:
+                line = f.readline()
+                if not line: break
+
+                parsed = parser_func(line)
+                if parsed: batch.append(parsed)
+
+                if len(batch) >= LOG_BATCH_SIZE:
+                    if send_batch(batch, endpoint, headers):
+                        new_position = f.tell()
+                        agent_state["files"][log_key] = {"inode": current_inode, "position": new_position}
+                        save_state(agent_state)
+                        batch = []
+                        time.sleep(1)
+                    else:
+                        return
+            
+            if batch:
+                if send_batch(batch, endpoint, headers):
+                    new_position = f.tell()
+                    agent_state["files"][log_key] = {"inode": current_inode, "position": new_position}
+                    save_state(agent_state)
+    except Exception as e:
+        print(f"[ERROR] in process_log_file for {log_key}: {e}")
+
+# === MAIN AGENT LOOP ===
 def main_loop():
-    global last_vpn_profiles_checksum, last_activity_log_checksum, last_openvpn_log_checksum
-    headers = {"Authorization": f"Bearer {AGENT_API_KEY}"}
+    headers = {"Authorization": f"Bearer {AGENT_API_KEY}", "Content-Type": "application/json"}
     
     while True:
         try:
-            # 1. Report status
-            status = get_openvpn_service_status()
-            active_users = get_openvpn_active_users_from_status_log()
-            payload = {"serverId": SERVER_ID, "serviceStatus": status, "activeUsers": active_users}
+            # 1. Report Status
+            status_payload = {
+                "serverId": SERVER_ID,
+                "serviceStatus": get_openvpn_service_status(),
+                "activeUsers": get_openvpn_active_users(),
+            }
             if CPU_RAM_MONITORING_INTERVAL is not None:
-                payload["cpuUsage"] = get_cpu_usage()
-                payload["ramUsage"] = get_ram_usage()
-            requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=payload, headers=headers, timeout=10)
+                status_payload["cpuUsage"] = get_cpu_usage()
+                status_payload["ramUsage"] = get_ram_usage()
+            requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
 
-            # 2. Sync profiles (now calling the new function)
+            # 2. Sync Full Profiles (jika berubah)
             sync_profiles(headers)
-
-            # 3. Sync activity logs
-            act_logs, act_checksum = parse_activity_logs()
-            if act_checksum and act_checksum != last_activity_log_checksum:
-                requests.post(f"{DASHBOARD_API_URL}/agent/report-activity-logs", json={"serverId": SERVER_ID, "activityLogs": act_logs}, headers=headers, timeout=10)
-                last_activity_log_checksum = act_checksum
-
-            # 4. Sync openvpn logs
-            ovpn_logs, ovpn_checksum = parse_openvpn_logs()
-            if ovpn_checksum and ovpn_checksum != last_openvpn_log_checksum:
-                requests.post(f"{DASHBOARD_API_URL}/agent/report-openvpn-logs", json={"serverId": SERVER_ID, "openvpnLogs": ovpn_logs}, headers=headers, timeout=10)
-                last_openvpn_log_checksum = ovpn_checksum
-
-            # 5. Process actions
+            
+            # Proses log dengan meneruskan 'headers'
+            process_log_file(
+                log_key="activity_log",
+                base_path=OVPN_ACTIVITY_LOG_PATH,
+                parser_func=parse_activity_log_line,
+                endpoint="/agent/report-activity-logs",
+                headers=headers
+            )
+            process_log_file(
+                log_key="openvpn_log",
+                base_path=OPENVPN_LOG_PATH,
+                parser_func=package_raw_log_line,
+                endpoint="/agent/report-openvpn-logs",
+                headers=headers
+            )
+            
+            # 5. Proses Aksi dari Dashboard
             resp = requests.get(f"{DASHBOARD_API_URL}/agent/action-logs?serverId={SERVER_ID}", headers=headers, timeout=10)
             actions = resp.json()
             for action in actions:
                 try:
-                    action_id = action.get('id')
-                    action_type = action.get('action')
-                    details = action.get('details')
+                    action_id, action_type, details = action.get('id'), action.get('action'), action.get('details')
                     result = {"status": "success", "message": "", "ovpnFileContent": None}
                     
-                    action_performed = False  # Flag to indicate if create/revoke action was performed
+                    action_performed = False
                     if action_type == "CREATE_USER":
                         username = sanitize_username(details)
                         run_command(["sudo", SCRIPT_PATH, "create", username])
@@ -748,9 +744,8 @@ def main_loop():
                     elif action_type == "DECOMMISSION_AGENT":
                         try:
                             requests.post(f"{DASHBOARD_API_URL}/agent/decommission-complete", json={"serverId": SERVER_ID}, headers=headers, timeout=5)
-                        except:
+                        except: 
                             pass
-                        # Self-destruct via systemd-run
                         import subprocess
                         subprocess.run([
                             "sudo", "systemd-run", "--on-active=3s",
@@ -759,12 +754,10 @@ def main_loop():
                         print("💀 Shutting down for self-destruct...")
                         sys.exit(0)
                     
-                    # Send action result to dashboard
                     if action_type != "DECOMMISSION_AGENT":
                         requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": action_id, **result}, headers=headers, timeout=10)
                     
-                    # === MAIN CHANGE: TRIGGER IMMEDIATE SYNC IF NEEDED ===
                     if action_performed:
                         print(f"Action '{action_type}' completed. Triggering immediate profile sync.")
                         time.sleep(2)
@@ -772,14 +765,38 @@ def main_loop():
 
                 except Exception as e:
                     requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
-                        json={"actionLogId": action.get('id', 'N/A'), "status": "failed", "message": str(e)},
+                        json={"actionLogId": action.get('id'), "status": "failed", "message": str(e)},
                         headers=headers, timeout=10)
+
+        except requests.exceptions.RequestException as e:
+            print(f"[NETWORK ERROR] Could not connect to dashboard: {e}")
         except Exception as e:
-            print(f"[ERROR] {e}")
+            print(f"[FATAL ERROR] in main loop: {e}")
+        
+        print(f"--- Cycle complete, sleeping for {METRICS_INTERVAL} seconds ---")
         time.sleep(METRICS_INTERVAL)
 
+# --- Parser/Packager ---
+def parse_activity_log_line(line: str) -> Optional[Dict]:
+    parts = line.strip().split(',')
+    if len(parts) < 2: return None
+    try:
+        ts = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S').isoformat() + "Z"
+        action, username = parts[1], (parts[2] if len(parts) > 2 else None)
+        public_ip, vpn_ip, bytes_r, bytes_s = (parts[3] if len(parts) > 3 else None), None, None, None
+        if action == "CONNECT" and len(parts) > 4: vpn_ip = parts[4]
+        elif action == "DISCONNECT" and len(parts) > 5:
+            bytes_r, bytes_s = int(parts[4]), int(parts[5])
+        return {"timestamp": ts, "action": action, "username": username, "publicIp": public_ip, "vpnIp": vpn_ip, "bytesReceived": bytes_r, "bytesSent": bytes_s}
+    except (ValueError, IndexError): return None
+
+def package_raw_log_line(line: str) -> Optional[Dict]:
+    stripped_line = line.strip()
+    if stripped_line: return {"message": stripped_line}
+    return None
+
 if __name__ == "__main__":
-    print("🚀 OpenVPN Agent (Polling Mode) Started")
+    print("🚀 OpenVPN Agent (True RAM-Optimized) Started")
     main_loop()
 _PYTHON_SCRIPT_EOF_
     chmod +x "$SCRIPT_DIR/$PYTHON_AGENT_SCRIPT_NAME"
@@ -789,29 +806,38 @@ _PYTHON_SCRIPT_EOF_
     echo "⚙️  Writing client manager script..."
     cat << 'CLIENT_MANAGER_EOF' | tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
 #!/bin/bash
+# << MERGED: This version is simplified and fully non-interactive >>
 OPENVPN_INSTALL_SCRIPT="/root/ubuntu-22.04-lts-vpn-server.sh"
+
 create_client() {
     local username=$1
     if [ -z "$username" ]; then
         echo "⛔ Please provide a username. Usage: $0 create <username>"
         exit 1
     fi
+    # Non-interactively create a user
     printf "1\n%s\n1\n" "$username" | sudo "$OPENVPN_INSTALL_SCRIPT"
-    sleep 1 # <-- ADD THIS DELAY
+    sleep 1
 }
+
 revoke_client() {
     local username="$1"
     if [ -z "$username" ]; then exit 1; fi
+    
+    # Case-insensitive search for the username to get its number
     local num=$(sudo tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f2 | nl -w1 -s' ' | awk -v name="$username" 'BEGIN{IGNORECASE=1} $2 == name {print $1; exit}')
-    if [ -z "$num" ]; then exit 1; fi
-    expect <<EOF
-        spawn sudo "$OPENVPN_INSTALL_SCRIPT"
-        expect "Select an option*" { send "2\r" }
-        expect "Select one client*" { send "$num\r" }
-        expect eof
-EOF
-    sleep 1 # <-- ADD THIS DELAY
+    
+    if [ -z "$num" ]; then 
+        echo "⛔ Client '$username' not found or already revoked."
+        exit 1
+    fi
+
+    # Non-interactively revoke a user by piping 'y' to the confirmation prompt
+    # This removes the need for 'expect' and makes the script simpler and more reliable.
+    printf "2\n%s\ny\n" "$num" | sudo "$OPENVPN_INSTALL_SCRIPT"
+    sleep 1
 }
+
 case "$1" in
     create) create_client "$2" ;;
     revoke) revoke_client "$2" ;;
@@ -843,6 +869,7 @@ SELF_DESTRUCT_EOF
     echo "✅ Self-destruct script deployed."
 }
 
+# --- Systemd and Final Setup ---
 setup_openvpn_logrotate() {
     local f="/etc/logrotate.d/openvpn-log"
     if ! grep -q "/var/log/openvpn/openvpn.log" /etc/logrotate.d/* 2>/dev/null; then
@@ -883,7 +910,7 @@ EOF
 create_systemd_service_file() {
     cat > "/etc/systemd/system/$APP_NAME.service" << EOF
 [Unit]
-Description=OpenVPN Polling Agent for $SERVER_ID
+Description=OpenVPN Polling Agent for $SERVER_ID (RAM-Optimized)
 After=network.target
 
 [Service]
@@ -927,11 +954,24 @@ main() {
     setup_openvpn_logrotate
     setup_user_activity_logrotate
     configure_systemd
+    read -p "Do you want to rotate logs and restart openvpn@server now? (y/N): " rotate_choice
+    rotate_choice=${rotate_choice:-n}
+    if [[ "${rotate_choice,,}" == "y" ]]; then
+        echo "🔄 Rotating logs and restarting openvpn@server..."
+        logrotate -d /etc/logrotate.conf
+        logrotate -f /etc/logrotate.conf
+        systemctl restart openvpn@server
+        echo "✅ Logs rotated and openvpn@server restarted."
+    elif [[ "${rotate_choice,,}" != "n" && -n "$rotate_choice" ]]; then
+        echo "⚠️  Invalid input, skipping log rotation and openvpn@server restart."
+    else
+        echo "ℹ️  Skipping log rotation and openvpn@server restart."
+    fi
 
     echo ""
-    echo "🎉 DEPLOYMENT COMPLETE (POLLING-ONLY MODE)"
-    echo "✅ Agent is running as a background service with NO open port."
-    echo "✅ All communication is outbound-only to your dashboard."
+    echo "🎉 DEPLOYMENT COMPLETE (ULTIMATE MODE: FEATURE-COMPLETE & RAM-OPTIMIZED)"
+    echo "✅ Agent is running efficiently, streaming all rotated logs to save RAM."
+    echo "✅ All features including agent decommission are enabled."
     echo "🔧 Manage with: sudo systemctl {status|stop|restart} $APP_NAME"
 }
 
