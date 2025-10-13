@@ -624,6 +624,7 @@ def send_batch(batch: list, endpoint: str, headers: dict) -> bool:
         return False
 
 # --- ✅ FUNGSI PROSES LOG YANG BENAR-BENAR HEMAT RAM ---
+def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, headers: dict):
     agent_state = load_state()
     file_state = agent_state.get("files", {}).get(log_key, {})
     
@@ -691,36 +692,7 @@ def main_loop():
     
     while True:
         try:
-            # 1. Report Status
-            status_payload = {
-                "serverId": SERVER_ID,
-                "serviceStatus": get_openvpn_service_status(),
-                "activeUsers": get_openvpn_active_users(),
-            }
-            if CPU_RAM_MONITORING_INTERVAL is not None:
-                status_payload["cpuUsage"] = get_cpu_usage()
-                status_payload["ramUsage"] = get_ram_usage()
-            requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
 
-            # 2. Sync Full Profiles (jika berubah)
-            sync_profiles(headers)
-            
-            # Proses log dengan meneruskan 'headers'
-            process_log_file(
-                log_key="activity_log",
-                base_path=OVPN_ACTIVITY_LOG_PATH,
-                parser_func=parse_activity_log_line,
-                endpoint="/agent/report-activity-logs",
-                headers=headers
-            )
-            process_log_file(
-                log_key="openvpn_log",
-                base_path=OPENVPN_LOG_PATH,
-                parser_func=package_raw_log_line,
-                endpoint="/agent/report-openvpn-logs",
-                headers=headers
-            )
-            
             # 5. Proses Aksi dari Dashboard
             resp = requests.get(f"{DASHBOARD_API_URL}/agent/action-logs?serverId={SERVER_ID}", headers=headers, timeout=10)
             actions = resp.json()
@@ -767,6 +739,36 @@ def main_loop():
                     requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                         json={"actionLogId": action.get('id'), "status": "failed", "message": str(e)},
                         headers=headers, timeout=10)
+
+            # 1. Report Status
+            status_payload = {
+                "serverId": SERVER_ID,
+                "serviceStatus": get_openvpn_service_status(),
+                "activeUsers": get_openvpn_active_users(),
+            }
+            if CPU_RAM_MONITORING_INTERVAL is not None:
+                status_payload["cpuUsage"] = get_cpu_usage()
+                status_payload["ramUsage"] = get_ram_usage()
+            requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
+
+            # 2. Sync Full Profiles (jika berubah)
+            sync_profiles(headers)
+            
+            # Proses log dengan meneruskan 'headers'
+            process_log_file(
+                log_key="activity_log",
+                base_path=OVPN_ACTIVITY_LOG_PATH,
+                parser_func=parse_activity_log_line,
+                endpoint="/agent/report-activity-logs",
+                headers=headers
+            )
+            process_log_file(
+                log_key="openvpn_log",
+                base_path=OPENVPN_LOG_PATH,
+                parser_func=package_raw_log_line,
+                endpoint="/agent/report-openvpn-logs",
+                headers=headers
+            )
 
         except requests.exceptions.RequestException as e:
             print(f"[NETWORK ERROR] Could not connect to dashboard: {e}")
