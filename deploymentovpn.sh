@@ -14,7 +14,7 @@ set -e
 PYTHON_AGENT_SCRIPT_NAME="main.py"
 CLIENT_MANAGER_SCRIPT_NAME="openvpn-client-manager.sh"
 OPENVPN_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/Angristan/openvpn-install/master/openvpn-install.sh"
-OPENVPN_INSTALL_SCRIPT_PATH="/root/ubuntu-22.04-lts-vpn-server.sh"
+OPENVPN_INSTALL_SCRIPT_PATH=""
 AGENT_USER="root"
 BASE_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 SCRIPT_DIR="$BASE_DIR/openvpn-agent"
@@ -54,6 +54,11 @@ get_user_input() {
     while [ -z "$SERVER_ID" ]; do
         read -p "🏷️  Enter the Server ID (e.g., SERVER-01): " SERVER_ID
         [ -z "$SERVER_ID" ] && echo "⛔ Server ID cannot be empty."
+    done
+    echo ""
+    while [ -z "$SECRET_ENCRYPTION_KEY" ]; do
+        read -p "🔐  Enter the ENCRYPTION KEY (e.g., SERVER-01): " SECRET_ENCRYPTION_KEY
+        [ -z "$SECRET_ENCRYPTION_KEY" ] && echo "⛔ ENCRYPTION KEY cannot be empty."
     done
     echo ""
     echo "Select the Dashboard API protocol:"
@@ -142,6 +147,11 @@ get_user_input() {
     echo "✅ Final OVPN directories: $OVPN_DIRS_STRING"
 
     echo ""
+    read -p "💾 Enter RAM limit for the agent (e.g., 100M). Default: 100M: " RAM_LIMIT
+    RAM_LIMIT=${RAM_LIMIT:-100M}
+    echo "✅ Agent will be limited to $RAM_LIMIT of RAM."
+
+    echo ""
     read -p "⏱️  Enter main loop interval in seconds (Default: 60): " METRICS_INTERVAL
     METRICS_INTERVAL=${METRICS_INTERVAL:-60}
     echo "✅ Main loop interval: $METRICS_INTERVAL sec."
@@ -221,62 +231,127 @@ check_and_install_openvpn() {
     local openvpn_found=false
     echo "🔎 Searching for OpenVPN service..."
     for service in "${service_names[@]}"; do
-        if systemctl is-active "$service" 2>/dev/null; then
+        if systemctl is-active "$service" &>/dev/null; then
             echo "✅ OpenVPN service ($service) found and running."
             openvpn_found=true
             break
         fi
     done
-    if ! $openvpn_found && pgrep openvpn > /dev/null 2>&1; then
+
+    if ! $openvpn_found && pgrep openvpn &>/dev/null; then
         echo "✅ OpenVPN process found running."
         openvpn_found=true
     fi
+
+    if $openvpn_found; then
+        echo "✅ OpenVPN is already installed and running."
+    else
+        echo "⚠️ OpenVPN is not installed or not running on this server. The installer script is required."
+    fi
+
+    echo ""
+    echo "🔎 Searching for the OpenVPN installer script (e.g., ubuntu-22.04-lts-vpn-server.sh)..."
+    local installer_found=false
+    local search_paths=("/root" "${OVPN_DIRS_ARRAY[@]}")
+    local possible_names=("openvpn-install.sh" "ubuntu-22.04-lts-vpn-server.sh")
+
+    for dir in "${search_paths[@]}"; do
+        for name in "${possible_names[@]}"; do
+            local full_path="$dir/$name"
+            if [ -f "$full_path" ]; then
+                OPENVPN_INSTALL_SCRIPT_PATH="$full_path"
+                echo "✅ Found existing installer script at: $OPENVPN_INSTALL_SCRIPT_PATH"
+                installer_found=true
+                break 2
+            fi
+        done
+    done
+
+    if ! $installer_found; then
+        echo "⚠️ Installer script not found in provided directories."
+        echo "What would you like to do?"
+        echo "  1) Download the script automatically to /root/ubuntu-22.04-lts-vpn-server.sh (Recommended)"
+        echo "  2) Specify the path to an existing script manually"
+        echo "  3) Exit installation"
+        read -p "Your choice [1]: " installer_choice
+        installer_choice=${installer_choice:-1}
+
+        case "$installer_choice" in
+            1)
+                OPENVPN_INSTALL_SCRIPT_PATH="/root/ubuntu-22.04-lts-vpn-server.sh"
+                echo "📥 Downloading Angristan's OpenVPN installation script to $OPENVPN_INSTALL_SCRIPT_PATH..."
+                if ! wget "$OPENVPN_INSTALL_SCRIPT_URL" -O "$OPENVPN_INSTALL_SCRIPT_PATH"; then
+                    echo "⛔ Failed to download OpenVPN installation script."
+                    exit 1
+                fi
+                echo "✅ Script downloaded successfully."
+                ;;
+            2)
+                # --- LOGIKA BARU UNTUK INPUT PINTAR ---
+                while true; do
+                    read -p "📂 Enter the full path to the script OR the directory containing it: " user_path
+                    if [ -f "$user_path" ]; then
+                        # Jika input adalah file yang valid
+                        OPENVPN_INSTALL_SCRIPT_PATH="$user_path"
+                        echo "✅ Using installer script at: $OPENVPN_INSTALL_SCRIPT_PATH"
+                        break
+                    elif [ -d "$user_path" ]; then
+                        # Jika input adalah direktori, cari di dalamnya
+                        local found_in_dir=false
+                        for name in "${possible_names[@]}"; do
+                            local potential_file="$user_path/$name"
+                            if [ -f "$potential_file" ]; then
+                                OPENVPN_INSTALL_SCRIPT_PATH="$potential_file"
+                                echo "✅ Found installer script inside the directory: $OPENVPN_INSTALL_SCRIPT_PATH"
+                                found_in_dir=true
+                                break
+                            fi
+                        done
+                        if $found_in_dir; then
+                            break
+                        else
+                            echo "⛔ Installer script not found inside directory '$user_path'. Please try again."
+                        fi
+                    else
+                        echo "⛔ Path '$user_path' is not a valid file or directory. Please try again."
+                    fi
+                done
+                ;;
+            *)
+                echo "❌ Exiting installation."
+                exit 1
+                ;;
+        esac
+    fi
+
+    echo "🔐 Making installer script executable..."
+    chmod -v +x "$OPENVPN_INSTALL_SCRIPT_PATH"
+    echo ""
+
     if ! $openvpn_found; then
-        echo "⚠️ OpenVPN is not installed or not running on this server."
-        echo ""
-        echo "📥 Downloading Angristan's OpenVPN installation script..."
-        if wget "$OPENVPN_INSTALL_SCRIPT_URL" -O "$OPENVPN_INSTALL_SCRIPT_PATH"; then
-            echo "✅ Script downloaded successfully to $OPENVPN_INSTALL_SCRIPT_PATH"
-        else
-            echo "⛔ Failed to download OpenVPN installation script from:"
-            echo "   $OPENVPN_INSTALL_SCRIPT_URL"
-            exit 1
-        fi
-        echo "🔐 Making script executable..."
-        chmod -v +x "$OPENVPN_INSTALL_SCRIPT_PATH"
-        echo ""
         echo "▶️  Running OpenVPN installation script..."
         echo "⚠️  Please follow the prompts to configure your OpenVPN server."
         echo ""
-        if sudo bash "$OPENVPN_INSTALL_SCRIPT_PATH"; then
-            echo ""
-            echo "✅ OpenVPN installed and configured successfully."
-        else
+        if ! sudo bash "$OPENVPN_INSTALL_SCRIPT_PATH"; then
             echo "⛔ Failed to install OpenVPN. Please check the errors above."
             exit 1
         fi
+        echo ""
+        echo "✅ OpenVPN installed and configured successfully."
         echo "⏳ Waiting for OpenVPN service to start..."
         sleep 5
         local install_verified=false
         for service in "${service_names[@]}"; do
-            if systemctl is-active "$service" 2>/dev/null; then
+            if systemctl is-active "$service" &>/dev/null; then
                 echo "✅ OpenVPN service ($service) is now running."
                 install_verified=true
                 break
             fi
         done
         if ! $install_verified; then
-            echo "⚠️  OpenVPN service may not have started properly. Checking process..."
-            if pgrep openvpn > /dev/null 2>&1; then
-                echo "✅ OpenVPN process is running."
-            else
-                echo "⛔ OpenVPN installation verification failed."
-                echo "   Please check the installation manually."
-                exit 1
-            fi
+            echo "⛔ OpenVPN installation verification failed. Please check manually."
+            exit 1
         fi
-    else
-        echo "✅ OpenVPN is already installed and running."
     fi
 }
 
@@ -326,8 +401,8 @@ install_dependencies() {
     echo "✅ Virtual environment created successfully."
     echo "📦 Installing Python dependencies..."
     "$VENV_PATH/bin/pip" install --upgrade pip
-    echo "   Installing: python-dotenv, requests, psutil..."
-    if "$VENV_PATH/bin/pip" install python-dotenv psutil requests; then
+    echo "   Installing: python-dotenv, requests, psutil, pycryptodome..."
+    if "$VENV_PATH/bin/pip" install python-dotenv psutil requests pycryptodome; then
         echo "✅ All Python dependencies installed successfully."
     else
         echo "⛔ Failed to install Python dependencies."
@@ -359,6 +434,7 @@ OPENVPN_LOG_PATH="/var/log/openvpn/openvpn.log"
 SERVICE_NAME="$APP_NAME"
 METRICS_INTERVAL_SECONDS="$METRICS_INTERVAL"
 CPU_RAM_MONITORING_INTERVAL="$CPU_RAM_INTERVAL"
+SECRET_ENCRYPTION_KEY="$SECRET_ENCRYPTION_KEY"
 EOF
     chown "$AGENT_USER":"$AGENT_USER" "$SCRIPT_DIR/.env"
     chmod 600 "$SCRIPT_DIR/.env"
@@ -405,6 +481,9 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import psutil
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+import base64
 
 load_dotenv()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -539,22 +618,25 @@ def run_command(cmd: list) -> None:
 
 # === DATA PARSING FUNCTIONS ===
 
-def parse_full_profiles() -> list:
-    """Parses index.txt and returns a list of profiles WITH ovpnFileContent."""
+def parse_full_profiles(encryption_key: bytes) -> list:
+    """
+    Mem-parse index.txt, mengenkripsi konten .ovpn, dan mengembalikan daftar profil.
+    """
     profiles = []
-    if not os.path.exists(EASY_RSA_INDEX_PATH): 
+    if not os.path.exists(EASY_RSA_INDEX_PATH):
         return []
+    
     server_cn = get_server_cn()
     try:
         with open(EASY_RSA_INDEX_PATH, 'r') as f:
             for line in f:
                 parts = line.strip().split('\t')
-                if len(parts) < 6: 
+                if len(parts) < 6:
                     continue
-                
+
                 cn_match = re.search(r'/CN=([^/]+)', line)
                 username_raw = cn_match.group(1) if cn_match else "unknown"
-                if username_raw == server_cn: 
+                if username_raw == server_cn:
                     continue
 
                 username = "".join(filter(str.isprintable, username_raw)).lower().strip()
@@ -565,26 +647,36 @@ def parse_full_profiles() -> list:
                     if exp_str and exp_str != 'Z':
                         dt = datetime.strptime(exp_str, '%y%m%d%H%M%SZ')
                         expiration_date = dt.replace(tzinfo=timezone.utc)
-                except ValueError: 
+                except ValueError:
                     pass
 
                 try:
                     if cert_status == 'R' and rev_str and rev_str != 'Z':
                         dt = datetime.strptime(rev_str, '%y%m%d%H%M%SZ')
                         revocation_date = dt.replace(tzinfo=timezone.utc)
-                except ValueError: 
+                except ValueError:
                     pass
 
                 status_map = {'V': 'VALID', 'R': 'REVOKED', 'E': 'EXPIRED'}
                 vpn_status = status_map.get(cert_status, "UNKNOWN")
                 
-                ovpn_content = find_ovpn_file(username) if vpn_status == "VALID" else None
+                ovpn_content_plain = find_ovpn_file(username) if vpn_status == "VALID" else None
                 
+                encrypted_content = None
+                if ovpn_content_plain:
+                    try:
+                        # Enkripsi konten di sini
+                        encrypted_content = encrypt(ovpn_content_plain, encryption_key)
+                    except Exception as e:
+                        print(f"⚠️  Gagal mengenkripsi profil untuk {username}: {e}")
+
                 profiles.append({
-                    "username": username, "status": vpn_status,
+                    "username": username,
+                    "status": vpn_status,
                     "expirationDate": expiration_date.isoformat() if expiration_date else None,
                     "revocationDate": revocation_date.isoformat() if revocation_date else None,
-                    "serialNumber": serial, "ovpnFileContent": ovpn_content,
+                    "serialNumber": serial,
+                    "ovpnFileContent": encrypted_content,  # Gunakan konten yang sudah terenkripsi
                 })
         return profiles
     except Exception as e:
@@ -592,20 +684,26 @@ def parse_full_profiles() -> list:
         return []
 
 # --- Fungsi Sinkronisasi Profil ---
-def sync_profiles(headers: Dict[str, str]) -> None:
+def sync_profiles(headers: Dict[str, str], encryption_key: bytes) -> None:
+    """
+    Memeriksa perubahan pada index.txt dan mengirimkan profil terenkripsi jika ada perubahan.
+    """
     global last_vpn_profiles_checksum
     try:
         prof_checksum = get_streamed_checksum(EASY_RSA_INDEX_PATH)
         if prof_checksum and prof_checksum != last_vpn_profiles_checksum:
             print("Change detected, syncing full VPN profiles...")
-            full_profiles = parse_full_profiles()
+            # Teruskan kunci enkripsi saat memanggil parse_full_profiles
+            full_profiles = parse_full_profiles(encryption_key)
+            
             requests.post(
                 f"{DASHBOARD_API_URL}/agent/sync-profiles",
                 json={"serverId": SERVER_ID, "vpnProfiles": full_profiles},
-                headers=headers, timeout=30
+                headers=headers,
+                timeout=30
             )
             last_vpn_profiles_checksum = prof_checksum
-            del full_profiles
+            del full_profiles  # Hapus dari memori setelah dikirim
     except Exception as e:
         print(f"[ERROR] Failed during profile sync: {e}")
 
@@ -686,10 +784,26 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
     except Exception as e:
         print(f"[ERROR] in process_log_file for {log_key}: {e}")
 
+def encrypt(plain_text: str, key: bytes) -> str:
+    """Enkripsi teks menggunakan AES-GCM dan mengembalikan string Base64."""
+    cipher = AES.new(key, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(plain_text.encode('utf-8'))
+    # Gabungkan nonce, tag, dan ciphertext, lalu encode ke Base64
+    # Nonce (16 bytes) + Tag (16 bytes) + Ciphertext
+    encrypted_payload = base64.b64encode(cipher.nonce + tag + ciphertext).decode('utf-8')
+    return encrypted_payload
+
 # === MAIN AGENT LOOP ===
 def main_loop():
     headers = {"Authorization": f"Bearer {AGENT_API_KEY}", "Content-Type": "application/json"}
     
+    SECRET_KEY_STR = os.getenv("SECRET_ENCRYPTION_KEY")
+    if not SECRET_KEY_STR or len(SECRET_KEY_STR) < 32:
+        print("❌ SECRET_ENCRYPTION_KEY tidak valid atau terlalu pendek di .env. Harus minimal 32 karakter.")
+        sys.exit(1)
+    # Paksa kunci menjadi 32 byte untuk AES-256
+    SECRET_KEY_BYTES = SECRET_KEY_STR.encode('utf-8')[:32]
+
     while True:
         try:
 
@@ -704,13 +818,18 @@ def main_loop():
                     action_performed = False
                     if action_type == "CREATE_USER":
                         username = sanitize_username(details)
-                        run_command(["sudo", SCRIPT_PATH, "create", username])
-                        result["ovpnFileContent"] = find_ovpn_file(username)
+                        run_command([SCRIPT_PATH, "create", username])
+                        ovpn_content = find_ovpn_file(username)
+                        if ovpn_content:
+                            # Enkripsi konten sebelum dikirim
+                            result["ovpnFileContent"] = encrypt(ovpn_content, SECRET_KEY_BYTES)
+                        else:
+                            result["ovpnFileContent"] = None
                         result["message"] = f"User {username} created."
                         action_performed = True
                     elif action_type in ["REVOKE_USER", "DELETE_USER"]:
                         username = sanitize_username(details)
-                        run_command(["sudo", SCRIPT_PATH, "revoke", username])
+                        run_command([SCRIPT_PATH, "revoke", username])
                         result["message"] = f"User {username} revoked."
                         action_performed = True
                     elif action_type == "DECOMMISSION_AGENT":
@@ -732,8 +851,8 @@ def main_loop():
                     
                     if action_performed:
                         print(f"Action '{action_type}' completed. Triggering immediate profile sync.")
-                        time.sleep(2)
-                        sync_profiles(headers)
+                        time.sleep(1)
+                        sync_profiles(headers, SECRET_KEY_BYTES)
 
                 except Exception as e:
                     requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
@@ -752,7 +871,7 @@ def main_loop():
             requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
 
             # 2. Sync Full Profiles (jika berubah)
-            sync_profiles(headers)
+            sync_profiles(headers, SECRET_KEY_BYTES)
             
             # Proses log dengan meneruskan 'headers'
             process_log_file(
@@ -806,44 +925,50 @@ _PYTHON_SCRIPT_EOF_
     echo "✅ Python agent script deployed successfully."
 
     echo "⚙️  Writing client manager script..."
-    cat << 'CLIENT_MANAGER_EOF' | tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
+    # Hilangkan tanda kutip dari 'EOF' agar variabel bisa terbaca
+    cat << CLIENT_MANAGER_EOF | tee "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME" > /dev/null
 #!/bin/bash
-# << MERGED: This version is simplified and fully non-interactive >>
-OPENVPN_INSTALL_SCRIPT="/root/ubuntu-22.04-lts-vpn-server.sh"
+# Skrip ini menggunakan path installer yang ditemukan secara dinamis.
+OPENVPN_INSTALL_SCRIPT="$OPENVPN_INSTALL_SCRIPT_PATH"
 
 create_client() {
-    local username=$1
-    if [ -z "$username" ]; then
-        echo "⛔ Please provide a username. Usage: $0 create <username>"
+    local username=\$1
+    if [ -z "\$username" ]; then
+        echo "⛔ Please provide a username. Usage: \$0 create <username>"
         exit 1
     fi
-    # Non-interactively create a user
-    printf "1\n%s\n1\n" "$username" | sudo "$OPENVPN_INSTALL_SCRIPT"
+    # Membuat user secara non-interaktif
+    printf "1\\n%s\\n1\\n" "\$username" | sudo "\$OPENVPN_INSTALL_SCRIPT"
     sleep 1
 }
 
 revoke_client() {
-    local username="$1"
-    if [ -z "$username" ]; then exit 1; fi
+    local username="\$1"
+    if [ -z "\$username" ]; then exit 1; fi
+
+    # Membaca path index.txt secara dinamis dari file .env
+    local index_path="\$(grep -oP 'EASY_RSA_INDEX_PATH=\\K.*' "$SCRIPT_DIR/.env" | tr -d '\"')"
+    if [ ! -f "\$index_path" ]; then
+        echo "⛔ Easy RSA index file not found at '\$index_path'."
+        exit 1
+    fi
+    # Mencari nomor klien (case-insensitive)
+    local num=\$(sudo tail -n +2 "\$index_path" | grep "^V" | cut -d '=' -f2 | nl -w1 -s' ' | awk -v name="\$username" 'BEGIN{IGNORECASE=1} \$2 == name {print \$1; exit}')
     
-    # Case-insensitive search for the username to get its number
-    local num=$(sudo tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f2 | nl -w1 -s' ' | awk -v name="$username" 'BEGIN{IGNORECASE=1} $2 == name {print $1; exit}')
-    
-    if [ -z "$num" ]; then 
-        echo "⛔ Client '$username' not found or already revoked."
+    if [ -z "\$num" ]; then 
+        echo "⛔ Client '\$username' not found or already revoked."
         exit 1
     fi
 
-    # Non-interactively revoke a user by piping 'y' to the confirmation prompt
-    # This removes the need for 'expect' and makes the script simpler and more reliable.
-    printf "2\n%s\ny\n" "$num" | sudo "$OPENVPN_INSTALL_SCRIPT"
+    # Mencabut user secara non-interaktif
+    printf "2\\n%s\\ny\\n" "\$num" | sudo "\$OPENVPN_INSTALL_SCRIPT"
     sleep 1
 }
 
-case "$1" in
-    create) create_client "$2" ;;
-    revoke) revoke_client "$2" ;;
-    *) echo "Usage: $0 {create|revoke} <username>"; exit 1 ;;
+case "\$1" in
+    create) create_client "\$2" ;;
+    revoke) revoke_client "\$2" ;;
+    *) echo "Usage: \$0 {create|revoke} <username>"; exit 1 ;;
 esac
 CLIENT_MANAGER_EOF
     chmod +x "$SCRIPT_DIR/$CLIENT_MANAGER_SCRIPT_NAME"
@@ -872,30 +997,82 @@ SELF_DESTRUCT_EOF
 }
 
 # --- Systemd and Final Setup ---
+# --- GANTI SEMUA FUNGSI LOGROTATE LAMA DENGAN TIGA FUNGSI BARU INI ---
+
 setup_openvpn_logrotate() {
-    local f="/etc/logrotate.d/openvpn-log"
-    if ! grep -q "/var/log/openvpn/openvpn.log" /etc/logrotate.d/* 2>/dev/null; then
-        cat > "$f" << 'EOF'
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🔄 CONFIGURING LOG ROTATION FOR OPENVPN LOG"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+
+    local log_file="/var/log/openvpn/openvpn.log"
+    local rotate_conf_dir="/etc/logrotate.d"
+    local new_conf_file="$rotate_conf_dir/openvpn-main-log"
+
+    # Periksa apakah sudah ada file konfigurasi yang mengatur log ini
+    if grep -rq "$log_file" "$rotate_conf_dir"; then
+        echo "✅ Log rotation for $log_file seems to be already configured. Skipping."
+        return
+    fi
+
+    # Tanya pengguna
+    read -p "Do you want to set up log rotation for $log_file? [Y/n]: " choice
+    choice=${choice:-Y} # Default ke Y jika pengguna hanya menekan Enter
+
+    if [[ "$choice" =~ ^[yY]$ ]]; then
+        echo "📝 Creating logrotate configuration at $new_conf_file..."
+        
+        cat << 'EOF' | tee "$new_conf_file" > /dev/null
 /var/log/openvpn/openvpn.log {
+    # Rotasi setiap bulan
     monthly
+    # Simpan 6 file log lama
     rotate 6
+    # Lanjutkan meski file log tidak ditemukan
     missingok
+    # Jangan rotasi jika file kosong
     notifempty
+    # Kompres file log yang sudah dirotasi
     compress
     delaycompress
+    # Jalankan skrip post-rotasi hanya sekali
     sharedscripts
+    # Beritahu OpenVPN untuk menggunakan file log baru setelah rotasi
     postrotate
-        systemctl reload openvpn@server >/dev/null 2>&1 || true
+        systemctl reload openvpn-server@server >/dev/null 2>&1 || true
     endscript
 }
 EOF
+        echo "✅ Logrotate configuration created successfully."
+    else
+        echo "⏩ Skipping logrotate setup for openvpn.log."
     fi
 }
 
 setup_user_activity_logrotate() {
-    local f="/etc/logrotate.d/openvpn-user-log"
-    if ! grep -q "user_activity.log" /etc/logrotate.d/* 2>/dev/null; then
-        cat > "$f" << 'EOF'
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🔄 CONFIGURING LOG ROTATION FOR ACTIVITY LOG"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+
+    local log_file="/var/log/openvpn/user_activity.log"
+    local rotate_conf_dir="/etc/logrotate.d"
+    local new_conf_file="$rotate_conf_dir/openvpn-activity-log"
+
+    if grep -rq "$log_file" "$rotate_conf_dir"; then
+        echo "✅ Log rotation for $log_file seems to be already configured. Skipping."
+        return
+    fi
+
+    read -p "Do you want to set up log rotation for $log_file? [Y/n]: " choice
+    choice=${choice:-Y}
+
+    if [[ "$choice" =~ ^[yY]$ ]]; then
+        echo "📝 Creating logrotate configuration at $new_conf_file..."
+
+        cat << 'EOF' | tee "$new_conf_file" > /dev/null
 /var/log/openvpn/user_activity.log {
     monthly
     rotate 6
@@ -903,9 +1080,59 @@ setup_user_activity_logrotate() {
     notifempty
     compress
     delaycompress
+    # Buat ulang file log dengan izin yang benar setelah rotasi
     create 0640 nobody nogroup
 }
 EOF
+        echo "✅ Logrotate configuration created successfully."
+    else
+        echo "⏩ Skipping logrotate setup for user_activity.log."
+    fi
+}
+
+setup_agent_logrotate() {
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "🔄 CONFIGURING LOG ROTATION FOR AGENT LOGS"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+
+    local agent_log_path="$SCRIPT_DIR/logs"
+    local rotate_conf_dir="/etc/logrotate.d"
+    local new_conf_file="$rotate_conf_dir/openvpn-agent-logs"
+
+    if grep -rq "$agent_log_path" "$rotate_conf_dir"; then
+        echo "✅ Log rotation for agent logs seems to be already configured. Skipping."
+        return
+    fi
+    
+    read -p "Do you want to set up log rotation for agent logs in $agent_log_path? [Y/n]: " choice
+    choice=${choice:-Y}
+
+    if [[ "$choice" =~ ^[yY]$ ]]; then
+        echo "📝 Creating logrotate configuration at $new_conf_file..."
+        
+        # 'EOF' tanpa tanda kutip agar variabel $SCRIPT_DIR bisa terbaca
+        cat << EOF | tee "$new_conf_file" > /dev/null
+$SCRIPT_DIR/logs/*.log {
+    # Rotasi setiap bulan
+    monthly
+    # Simpan 2 file log lama (2 bulan)
+    rotate 2
+    # Rotasi juga jika file lebih besar dari 10MB
+    size 10M
+    # Lanjutkan meski file log tidak ditemukan
+    missingok
+    # Jangan rotasi jika file kosong
+    notifempty
+    # Kompres file log yang sudah dirotasi
+    compress
+    delaycompress
+}
+EOF
+        echo "✅ Agent logrotate configuration created successfully."
+    else
+        echo "⏩ Skipping logrotate setup for agent logs."
     fi
 }
 
@@ -927,6 +1154,8 @@ StandardOutput=append:$SCRIPT_DIR/logs/agent.log
 StandardError=append:$SCRIPT_DIR/logs/agent.log
 KillMode=mixed
 TimeoutStopSec=10
+
+MemoryMax=$RAM_LIMIT
 
 [Install]
 WantedBy=multi-user.target
@@ -955,6 +1184,7 @@ main() {
     create_systemd_service_file
     setup_openvpn_logrotate
     setup_user_activity_logrotate
+    setup_agent_logrotate
     configure_systemd
     read -p "Do you want to rotate logs and restart openvpn@server now? (y/N): " rotate_choice
     rotate_choice=${rotate_choice:-n}
