@@ -362,7 +362,7 @@ find_easy_rsa_path() {
         "/etc/openvpn/pki/index.txt"
         "/usr/share/easy-rsa/pki/index.txt"
         "/etc/easy-rsa/pki/index.txt"
-        "/etc/openvpn/server/pki/index.txt"
+        "/etc/openvpn/server/easy-rsa/pki/index.txt"
     )
     for path in "${paths_to_check[@]}"; do
         if [ -f "$path" ]; then
