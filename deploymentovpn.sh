@@ -362,6 +362,7 @@ find_easy_rsa_path() {
         "/etc/openvpn/pki/index.txt"
         "/usr/share/easy-rsa/pki/index.txt"
         "/etc/easy-rsa/pki/index.txt"
+        "/etc/openvpn/server/pki/index.txt"
     )
     for path in "${paths_to_check[@]}"; do
         if [ -f "$path" ]; then
@@ -372,12 +373,25 @@ find_easy_rsa_path() {
             return 0
         fi
     done
-    echo "⛔ Easy-RSA index.txt path not found in common locations. Deployment failed."
+    echo "⚠️  Easy-RSA index.txt path not found in common locations."
     echo "   Locations checked:"
     for path in "${paths_to_check[@]}"; do
         echo "   • $path"
     done
-    return 1
+    
+    # Ask user for the path instead of failing
+    while true; do
+        read -p "📁 Please enter the full path to your Easy-RSA index.txt file: " user_index_path
+        if [ -f "$user_index_path" ]; then
+            EASY_RSA_INDEX_PATH="$user_index_path"
+            EASY_RSA_DIR=$(dirname "$EASY_RSA_INDEX_PATH" | xargs dirname)
+            EASY_RSA_SERVER_NAME_PATH="$EASY_RSA_DIR/SERVER_NAME_GENERATED"
+            echo "✅ Using index.txt path: $EASY_RSA_INDEX_PATH"
+            return 0
+        else
+            echo "⛔ The file '$user_index_path' does not exist. Please try again."
+        fi
+    done
 }
 
 install_dependencies() {
