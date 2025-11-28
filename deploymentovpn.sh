@@ -560,10 +560,10 @@ def get_streamed_checksum(filepath: str) -> Optional[str]:
         print(f"Could not calculate checksum for {filepath}: {e}")
         return None
 
-def get_cpu_usage() -> float: 
+def get_cpu_usage() -> float:
     return psutil.cpu_percent(interval=0.1)
 
-def get_ram_usage() -> float: 
+def get_ram_usage() -> float:
     return psutil.virtual_memory().percent
 
 def find_ovpn_file(username: str) -> Optional[str]:
@@ -591,7 +591,7 @@ def get_openvpn_service_status() -> str:
     try:
         result = os.system("systemctl is-active --quiet openvpn@server")
         return "running" if result == 0 else "stopped"
-    except: 
+    except:
         return "error"
 
 def get_server_cn() -> str:
@@ -599,14 +599,14 @@ def get_server_cn() -> str:
         try:
             with open(EASY_RSA_SERVER_NAME_PATH, 'r') as f:
                 return f.read().strip()
-        except: 
+        except:
             pass
     return "server_irL5Kfmg3FnRZaGE"
 
 def get_openvpn_active_users() -> list:
     users = []
     status_log_path = "/var/log/openvpn/status.log"
-    if not os.path.exists(status_log_path): 
+    if not os.path.exists(status_log_path):
         return []
     try:
         with open(status_log_path, 'r') as f:
@@ -622,7 +622,7 @@ def get_openvpn_active_users() -> list:
                     parts = line.split(',')
                     if parts and parts[0]:
                         users.append(parts[0].lower())
-    except: 
+    except:
         pass
     return users
 
@@ -639,7 +639,7 @@ def parse_full_profiles(encryption_key: bytes) -> list:
     profiles = []
     if not os.path.exists(EASY_RSA_INDEX_PATH):
         return []
-    
+
     server_cn = get_server_cn()
     try:
         with open(EASY_RSA_INDEX_PATH, 'r') as f:
@@ -655,7 +655,7 @@ def parse_full_profiles(encryption_key: bytes) -> list:
 
                 username = "".join(filter(str.isprintable, username_raw)).lower().strip()
                 cert_status, exp_str, rev_str, serial = parts[0], parts[1], parts[2], parts[3]
-                
+
                 expiration_date, revocation_date = None, None
                 try:
                     if exp_str and exp_str != 'Z':
@@ -673,9 +673,9 @@ def parse_full_profiles(encryption_key: bytes) -> list:
 
                 status_map = {'V': 'VALID', 'R': 'REVOKED', 'E': 'EXPIRED'}
                 vpn_status = status_map.get(cert_status, "UNKNOWN")
-                
+
                 ovpn_content_plain = find_ovpn_file(username) if vpn_status == "VALID" else None
-                
+
                 encrypted_content = None
                 if ovpn_content_plain:
                     try:
@@ -709,7 +709,7 @@ def sync_profiles(headers: Dict[str, str], encryption_key: bytes) -> None:
             print("Change detected, syncing full VPN profiles...")
             # Teruskan kunci enkripsi saat memanggil parse_full_profiles
             full_profiles = parse_full_profiles(encryption_key)
-            
+
             requests.post(
                 f"{DASHBOARD_API_URL}/agent/sync-profiles",
                 json={"serverId": SERVER_ID, "vpnProfiles": full_profiles},
@@ -739,9 +739,9 @@ def send_batch(batch: list, endpoint: str, headers: dict) -> bool:
 def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, headers: dict):
     agent_state = load_state()
     file_state = agent_state.get("files", {}).get(log_key, {})
-    
+
     is_first_run = not bool(file_state)
-    
+
     # --- ✅ PERUBAHAN UTAMA: Logika "Skip" hanya untuk "openvpn_log" ---
     if is_first_run and log_key == "openvpn_log":
         print(f"First run for {log_key}. Skipping all existing content.")
@@ -772,7 +772,7 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
         with open(base_path, 'r', errors='ignore') as f:
             f.seek(last_position)
             batch = []
-            
+
             while True:
                 line = f.readline()
                 if not line: break
@@ -789,7 +789,7 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
                         time.sleep(1)
                     else:
                         return
-            
+
             if batch:
                 if send_batch(batch, endpoint, headers):
                     new_position = f.tell()
@@ -807,49 +807,57 @@ def encrypt(plain_text: str, key: bytes) -> str:
     encrypted_payload = base64.b64encode(cipher.nonce + tag + ciphertext).decode('utf-8')
     return encrypted_payload
 
-# === MAIN AGENT LOOP ===
+# === MAIN AGENT LOOP (OPTIMIZED BATCH SYNC) ===
 def main_loop():
     headers = {"Authorization": f"Bearer {AGENT_API_KEY}", "Content-Type": "application/json"}
-    
+
     SECRET_KEY_STR = os.getenv("SECRET_ENCRYPTION_KEY")
     if not SECRET_KEY_STR or len(SECRET_KEY_STR) < 32:
         print("❌ SECRET_ENCRYPTION_KEY tidak valid atau terlalu pendek di .env. Harus minimal 32 karakter.")
         sys.exit(1)
-    # Paksa kunci menjadi 32 byte untuk AES-256
+    
     SECRET_KEY_BYTES = SECRET_KEY_STR.encode('utf-8')[:32]
 
     while True:
         try:
-
             # 5. Proses Aksi dari Dashboard
             resp = requests.get(f"{DASHBOARD_API_URL}/agent/action-logs?serverId={SERVER_ID}", headers=headers, timeout=10)
             actions = resp.json()
+            
+            # --- 🔥 OPTIMIZATION START: Flagging System ---
+            needs_profile_sync = False 
+            # ---------------------------------------------
+
             for action in actions:
                 try:
                     action_id, action_type, details = action.get('id'), action.get('action'), action.get('details')
                     result = {"status": "success", "message": "", "ovpnFileContent": None}
-                    
+
                     action_performed = False
+                    
+                    print(f"Processing action: {action_type} for {details}...") # Debug print dikit
+
                     if action_type == "CREATE_USER":
                         username = sanitize_username(details)
                         run_command([SCRIPT_PATH, "create", username])
                         ovpn_content = find_ovpn_file(username)
                         if ovpn_content:
-                            # Enkripsi konten sebelum dikirim
                             result["ovpnFileContent"] = encrypt(ovpn_content, SECRET_KEY_BYTES)
                         else:
                             result["ovpnFileContent"] = None
                         result["message"] = f"User {username} created."
                         action_performed = True
+                    
                     elif action_type in ["REVOKE_USER", "DELETE_USER"]:
                         username = sanitize_username(details)
                         run_command([SCRIPT_PATH, "revoke", username])
                         result["message"] = f"User {username} revoked."
                         action_performed = True
+                    
                     elif action_type == "DECOMMISSION_AGENT":
                         try:
                             requests.post(f"{DASHBOARD_API_URL}/agent/decommission-complete", json={"serverId": SERVER_ID}, headers=headers, timeout=5)
-                        except: 
+                        except:
                             pass
                         import subprocess
                         subprocess.run([
@@ -858,20 +866,29 @@ def main_loop():
                         ])
                         print("💀 Shutting down for self-destruct...")
                         sys.exit(0)
-                    
+
+                    # Kirim laporan per-item (ini tetep di dalam loop biar dashboard cepet dapet update status per user)
                     if action_type != "DECOMMISSION_AGENT":
                         requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": action_id, **result}, headers=headers, timeout=10)
-                    
+
+                    # Kalau sukses, tandain flag jadi True. JANGAN SYNC DISINI.
                     if action_performed:
-                        print(f"Action '{action_type}' completed. Triggering immediate profile sync.")
-                        time.sleep(1)
-                        sync_profiles(headers, SECRET_KEY_BYTES)
+                        needs_profile_sync = True
 
                 except Exception as e:
+                    print(f"⚠️ Error processing action {action.get('id')}: {e}")
                     requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                         json={"actionLogId": action.get('id'), "status": "failed", "message": str(e)},
                         headers=headers, timeout=10)
+
+            # --- 🔥 OPTIMIZATION END: Batch Sync ---
+            # Cek flag setelah keluar dari loop
+            if needs_profile_sync:
+                print(f"⚡ Batch actions completed. Triggering SINGLE profile sync.")
+                time.sleep(1) # Kasih jeda dikit biar file system settle
+                sync_profiles(headers, SECRET_KEY_BYTES)
+            # ---------------------------------------
 
             # 1. Report Status
             status_payload = {
@@ -884,10 +901,12 @@ def main_loop():
                 status_payload["ramUsage"] = get_ram_usage()
             requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
 
-            # 2. Sync Full Profiles (jika berubah)
+            # 2. Sync Full Profiles (Routine check)
+            # Ini tetep jalan buat handle kasus manual change di server (bukan via dashboard)
+            # Karena ada checksum check di dalem sync_profiles, ini aman & murah kalau gak ada perubahan.
             sync_profiles(headers, SECRET_KEY_BYTES)
-            
-            # Proses log dengan meneruskan 'headers'
+
+            # Proses log
             process_log_file(
                 log_key="activity_log",
                 base_path=OVPN_ACTIVITY_LOG_PATH,
@@ -907,7 +926,7 @@ def main_loop():
             print(f"[NETWORK ERROR] Could not connect to dashboard: {e}")
         except Exception as e:
             print(f"[FATAL ERROR] in main loop: {e}")
-        
+
         print(f"--- Cycle complete, sleeping for {METRICS_INTERVAL} seconds ---")
         time.sleep(METRICS_INTERVAL)
 
@@ -1126,7 +1145,7 @@ setup_agent_logrotate() {
     if [[ "$choice" =~ ^[yY]$ ]]; then
         echo "📝 Creating logrotate configuration at $new_conf_file..."
         
-        # 'EOF' tanpa tanda kutip agar variabel $SCRIPT_DIR bisa terbaca
+        # Fixed the EOF delimiter - removed quotes to allow variable expansion
         cat << EOF | tee "$new_conf_file" > /dev/null
 $SCRIPT_DIR/logs/*.log {
     # Rotasi setiap bulan
