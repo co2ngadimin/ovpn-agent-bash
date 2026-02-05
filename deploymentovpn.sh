@@ -866,6 +866,40 @@ def main_loop():
                         ])
                         print("💀 Shutting down for self-destruct...")
                         sys.exit(0)
+                    
+                    elif action_type == "RESTART_AGENT":
+                        try:
+                            # Kirim laporan awal bahwa restart sedang berlangsung
+                            requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
+                                        json={
+                                            "actionLogId": action_id,
+                                            "status": "success",
+                                            "message": "Restart initiated, agent going offline shortly"
+                                        },
+                                        headers=headers,
+                                        timeout=10)
+                            
+                            # Lakukan restart layanan agent
+                            import subprocess
+                            subprocess.run(["sudo", "systemctl", "restart", os.getenv("SERVICE_NAME", "openvpn-agent")])
+                            
+                            print("🔄 Agent restart command issued successfully")
+                            
+                        except Exception as restart_error:
+                            # Dalam kasus error, laporkan ke dashboard
+                            try:
+                                requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
+                                            json={
+                                                "actionLogId": action_id,
+                                                "status": "failed",
+                                                "message": f"Failed to restart agent: {str(restart_error)}"
+                                            },
+                                            headers=headers,
+                                            timeout=10)
+                            except:
+                                pass  # Abaikan error saat mengirim laporan error
+                            
+                            print(f"Failed to restart agent: {restart_error}")
 
                     # Kirim laporan per-item (ini tetep di dalam loop biar dashboard cepet dapet update status per user)
                     if action_type != "DECOMMISSION_AGENT":
