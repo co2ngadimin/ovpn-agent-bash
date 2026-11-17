@@ -36,6 +36,10 @@ What changed (`deploymentovpn.sh`):
 - logrotate (Decision 3): openvpn.log `copytruncate`, postrotate reload removed (:1321-1360); activity log keeps `create 0640 nobody nogroup` + `delaycompress` (:1368); agent logs `size 10M`, `rotate 2`, `copytruncate`, `monthly` dropped (:1408-1446). The forced `logrotate -f /etc/logrotate.conf` + `restart openvpn@server` prompt is gone.
 - Tests: `tests/test_agent.py` (`TailTest`, `ActivityParseTest`), new `tests/test_install_conf.sh` (fixture dirs only, `systemctl`/`curl` stubbed).
 
+Follow-up (commit after `5acb1a4`):
+- Service status: installer writes `OPENVPN_UNIT` to `.env` (:451) via `openvpn_unit()` (:1147, reuses `detect_openvpn_conf`, default `openvpn@server`); agent reads it (:521, default `openvpn@server` for old nodes) and `get_openvpn_service_status` (:599) runs `systemctl is-active --quiet <unit>` via `subprocess.run` (list args, no shell).
+- copytruncate: on `size < position` (same inode) the agent first reads `<path>.1` from the saved position to its end when `.1` size >= saved position, then the truncated file from 0 (:818). Limits: truncation is only seen if the new file is already smaller than the saved position; a `.1` that is not the copy but happens to be large enough would be read from that offset.
+
 Deviations / choices:
 - Telegram env file is `<conf dir>/telegram.env` with `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (and optional `SERVER_IP`), mode `root:nogroup 0640`, not root-only 0600: OpenVPN runs the scripts as `nobody` (`user nobody`), so a 0600 root file would be unreadable and Telegram would never fire. The installer does not create this file; it prints how to.
 - Existing nodes using `node-setup/roti.env` (`BOT_TOKEN`/`CHAT_ID` in `/etc/openvpn/server/script/`) are not migrated; those nodes keep their own `client-connect` line, which the installer leaves in place with a warning.
@@ -47,6 +51,4 @@ Deviations / choices:
 
 Not done:
 - Existing nodes get only the agent fix (via `upgrade-agent.sh`, which replaces `main.py` only); writers, server.conf and logrotate changes need a separate rollout step, since `deploymentovpn.sh` must not be re-run on a node.
-- `copytruncate` on `openvpn.log` keeps the inode, so lines written between the last poll and the copy are lost (at most one poll interval per rotation).
-- Pre-existing: agent `get_openvpn_service_status` checks only `openvpn@server`; new-layout nodes report a wrong status (follow-up).
 - No real `status.log`/server.conf sample from a node was checked; a line half-written at the moment of reading is still sent as-is (writers use one `printf` per line, so unlikely).
