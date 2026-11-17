@@ -56,12 +56,6 @@ grep -q "$EXPECT_VERSION" "$T/main.py" || die "new agent is not $EXPECT_VERSION;
 
 BAK="$DIR/main.py.bak.$(date +%Y%m%d%H%M%S)"
 cp -p "$DIR/main.py" "$BAK"
-# Stage next to the target (same filesystem) so the swap is an atomic rename.
-cp "$T/main.py" "$DIR/main.py.new"
-{ chmod --reference="$DIR/main.py" "$DIR/main.py.new" && chown --reference="$DIR/main.py" "$DIR/main.py.new"; } \
-  || { rm -f "$DIR/main.py.new"; die "cannot copy perms/owner; nothing changed"; }
-mv -f "$DIR/main.py.new" "$DIR/main.py"
-
 # Restore the old agent and say honestly whether it is running again. Always attempts the restart.
 rollback() {
   trap - INT TERM HUP
@@ -76,18 +70,25 @@ rollback() {
 }
 trap 'rollback; exit 1' INT TERM HUP
 
+# Stage next to the target (same filesystem) so the swap is an atomic rename.
+cp "$T/main.py" "$DIR/main.py.new"
+{ chmod --reference="$DIR/main.py" "$DIR/main.py.new" && chown --reference="$DIR/main.py" "$DIR/main.py.new"; } \
+  || { rm -f "$DIR/main.py.new"; die "cannot copy perms/owner; nothing changed"; }
+mv -f "$DIR/main.py.new" "$DIR/main.py"
+
 # Restart=always would hide a crash loop behind "active", so also require an unchanged MainPID.
 healthy=0
 if systemctl restart "$SVC"; then
-  PID1=$(systemctl show -p MainPID --value "$SVC")
+  PID1=$(systemctl show -p MainPID --value "$SVC") || PID1=0
   sleep 15
-  PID2=$(systemctl show -p MainPID --value "$SVC")
+  PID2=$(systemctl show -p MainPID --value "$SVC") || PID2=0
   if systemctl is-active --quiet "$SVC" && [ "$PID1" != 0 ] && [ "$PID1" = "$PID2" ]; then healthy=1; fi
 fi
 
 if [ "$healthy" = 1 ]; then
   trap - INT TERM HUP
   journalctl -u "$SVC" -n 20 --no-pager || true
+  [ -f "$DIR/logs/agent.log" ] && tail -n 20 "$DIR/logs/agent.log" || true
   echo "Upgrade OK. Backup: $BAK"
   echo "Rollback: cp -p '$BAK' '$DIR/main.py' && systemctl restart $SVC"
   exit 0
@@ -95,5 +96,6 @@ fi
 
 echo "Service unhealthy after upgrade; rolling back." >&2
 journalctl -u "$SVC" -n 20 --no-pager >&2 || true
+[ -f "$DIR/logs/agent.log" ] && tail -n 20 "$DIR/logs/agent.log" >&2 || true  # unit redirects Python output here
 rollback
 exit 1

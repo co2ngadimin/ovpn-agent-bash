@@ -105,7 +105,21 @@ class ClientsTest(unittest.TestCase):
         self.assertEqual(self.agent.AGENT_VERSION, "2.0.0-geo")
 
     def test_clients_missing_file(self):
-        self.assertEqual(self._get("nope.log"), [])
+        self.assertIsNone(self._get("nope.log"))
+
+    def test_clients_unreadable_is_none(self):
+        self.assertIsNone(self.agent.get_openvpn_clients(self.FIX))  # a directory -> exception
+
+    def test_clients_empty_file_is_empty_list(self):
+        self.assertEqual(self._write(""), [])
+
+    def test_rows_after_end_ignored(self):
+        c = self._write("CLIENT_LIST,andi,1.2.3.4:5,10.8.0.2,,1,2,x,1794884400\nEND\n"
+                        "CLIENT_LIST,ghost,1.2.3.4:5,10.8.0.3,,1,2,x,1794884400\n")
+        self.assertEqual([x["cn"] for x in c], ["andi"])
+
+    def test_raw_log_line_capped(self):
+        self.assertEqual(len(self.agent.package_raw_log_line("a" * 20000)["message"]), 10000)
 
     def test_clients_bad_time(self):
         with tempfile.TemporaryDirectory() as d:

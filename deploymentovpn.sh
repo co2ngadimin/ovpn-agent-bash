@@ -621,13 +621,15 @@ def _parse_status_time(s: str):
             pass
     return None
 
-def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") -> list:
-    """Connected clients from status.log (v1 CSV, v2/v3 CLIENT_LIST rows)."""
+def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") -> Optional[list]:
+    """Connected clients from status.log (v1 CSV, v2/v3 CLIENT_LIST rows). None = unknown (missing/unreadable), [] = nobody connected."""
     clients = []
     try:
         with open(status_log_path, 'r') as f:
             parsing = False
             for line in f.read().split('\n'):
+                if line == "END":  # ignore ghost rows after a partially rewritten file
+                    break
                 if line.startswith("Common Name,Real Address"):
                     parsing = True
                     continue
@@ -650,7 +652,7 @@ def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") ->
                 if cn and cn != "UNDEF":  # UNDEF = client mid-handshake
                     clients.append({"cn": cn.lower(), "realAddress": _real_host(addr), "connectedSince": since})
     except Exception:
-        return []
+        return None
     return clients
 
 def run_command(cmd: list) -> None:
@@ -959,14 +961,17 @@ def main_loop():
             status_payload = {
                 "serverId": SERVER_ID,
                 "serviceStatus": get_openvpn_service_status(),
-                "activeUsers": [c["cn"] for c in clients],
-                "clients": clients[:MAX_CLIENTS],
+                "activeUsers": [c["cn"] for c in clients or []],
                 "agentVersion": AGENT_VERSION,
             }
+            if clients is not None:  # omitted = unknown; dashboard must not touch sessions
+                status_payload["clients"] = clients[:MAX_CLIENTS]
             if CPU_RAM_MONITORING_INTERVAL is not None:
                 status_payload["cpuUsage"] = get_cpu_usage()
                 status_payload["ramUsage"] = get_ram_usage()
-            requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
+            resp = requests.post(f"{DASHBOARD_API_URL}/agent/report-status", json=status_payload, headers=headers, timeout=10)
+            if not 200 <= resp.status_code < 300:
+                print(f"⚠️  report-status HTTP {resp.status_code}: {resp.text[:200]}")
 
             # 2. Sync Full Profiles (Routine check)
             # Ini tetep jalan buat handle kasus manual change di server (bukan via dashboard)
@@ -1013,7 +1018,7 @@ def parse_activity_log_line(line: str) -> Optional[Dict]:
 
 def package_raw_log_line(line: str) -> Optional[Dict]:
     stripped_line = line.strip()
-    if stripped_line: return {"message": stripped_line}
+    if stripped_line: return {"message": stripped_line[:10000]}  # dashboard rejects >10000 chars
     return None
 
 if __name__ == "__main__":
