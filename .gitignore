@@ -1,1 +1,5 @@
 __pycache__/
+logs/
+.agent_state.json
+.env
+venv/
