@@ -6,7 +6,7 @@
 # 1. FEATURE-COMPLETE: It can parse rotated logs and supports agent decommission.
 # 2. RAM-OPTIMIZED: It streams large log files line-by-line to keep RAM usage low.
 #
-# Usage: sudo ./deploymentovpn.sh
+# Usage: sudo ./deploymentovpn.sh [--yes]   (--yes: restart OpenVPN without asking if server.conf changed)
 #
 set -e
 
@@ -27,6 +27,9 @@ APP_NAME=""
 DASHBOARD_API_URL=""
 SERVER_ID=""
 OVPN_DIRS_STRING=""
+OVPN_ROOT=""
+ASSUME_YES=0
+OVPN_CONF_CHANGED=0
 
 # --- Functions ---
 
@@ -1115,6 +1118,203 @@ SELF_DESTRUCT_EOF
     echo "✅ Self-destruct script deployed."
 }
 
+# --- Access logs: client-connect/disconnect writers + server.conf directives ---
+# OVPN_ROOT is empty in production; tests point it at a fixture dir.
+
+# Sets OVPN_CONF and OVPN_UNIT; prefers the new layout unless only the old one exists or is in use.
+detect_openvpn_conf() {
+    local new="$OVPN_ROOT/etc/openvpn/server/server.conf" old="$OVPN_ROOT/etc/openvpn/server.conf"
+    if [ -f "$new" ] && { [ ! -f "$old" ] || systemctl is-active --quiet openvpn-server@server 2>/dev/null; }; then
+        OVPN_CONF=$new; OVPN_UNIT=openvpn-server@server
+    elif [ -f "$old" ]; then
+        OVPN_CONF=$old; OVPN_UNIT=openvpn@server
+    else
+        return 1
+    fi
+}
+
+write_connect_script() {
+    cat << 'CONNECT_SH_EOF'
+#!/bin/bash
+# client-connect: log activity + optional Telegram notify. Must always exit 0 (non-zero rejects the client).
+# Telegram is on only if telegram.env (root:nogroup 0640) next to this script sets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.
+ENV_FILE="$(dirname "$0")/telegram.env"
+[[ ! -r $ENV_FILE ]] || . "$ENV_FILE"
+
+LOG_FILE="/var/log/openvpn/user_activity.log"
+DATETIME=$(date "+%Y-%m-%d %H:%M:%S")
+LINE="━━━━━━━━━━━━━━━━━━━━━━━━━"
+esc() { local s=${1//&/&amp;}; s=${s//</&lt;}; printf '%s' "${s//>/&gt;}"; }
+# IV_* come from the client (untrusted), so always escape them.
+DEVICE=$(esc "${IV_PLAT:-unknown}${IV_PLAT_VER:+ $IV_PLAT_VER} · ${IV_GUI_VER:-OpenVPN ${IV_VER:-?}}")
+# The agent reads one CSV line with fixed columns; client-supplied delimiters must not change it.
+CN=${common_name//[$'\r\n,']/_}
+PUBLIC_IP=${trusted_ip//[$'\r\n,']/_}
+VPN_IP=${ifconfig_pool_remote_ip//[$'\r\n,']/_}
+
+printf '%s,CONNECT,%s,%s,%s\n' "$DATETIME" "$CN" "$PUBLIC_IP" "$VPN_IP" >> "$LOG_FILE" 2>/dev/null
+
+MESSAGE="✅ <b>VPN User Connected</b>
+${LINE}
+👤 User: $(esc "$common_name")
+🌐 Public IP: ${trusted_ip}
+🔒 VPN IP: ${ifconfig_pool_remote_ip}
+${LINE}
+🖥️ Server: $(hostname)
+📡 Server IP: ${SERVER_IP}
+🕐 Time: ${DATETIME}
+${LINE}
+📱 Device: ${DEVICE}"
+
+# Background + timeout so a slow Telegram never delays the user's connect; token stays off argv.
+if [[ -n ${TELEGRAM_BOT_TOKEN:-} && -n ${TELEGRAM_CHAT_ID:-} ]]; then
+  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" |
+    curl -s -m 10 --config - --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=${MESSAGE}" -d parse_mode=HTML >/dev/null 2>&1 &
+fi
+
+exit 0
+CONNECT_SH_EOF
+}
+
+write_disconnect_script() {
+    cat << 'DISCONNECT_SH_EOF'
+#!/bin/bash
+# client-disconnect: log activity + optional Telegram notify (see connect.sh for telegram.env).
+ENV_FILE="$(dirname "$0")/telegram.env"
+[[ ! -r $ENV_FILE ]] || . "$ENV_FILE"
+
+LOG_FILE="/var/log/openvpn/user_activity.log"
+DATETIME=$(date "+%Y-%m-%d %H:%M:%S")
+LINE="━━━━━━━━━━━━━━━━━━━━━━━━━"
+esc() { local s=${1//&/&amp;}; s=${s//</&lt;}; printf '%s' "${s//>/&gt;}"; }
+DEVICE=$(esc "${IV_PLAT:-unknown}${IV_PLAT_VER:+ $IV_PLAT_VER} · ${IV_GUI_VER:-OpenVPN ${IV_VER:-?}}")
+CN=${common_name//[$'\r\n,']/_}
+PUBLIC_IP=${trusted_ip//[$'\r\n,']/_}
+RECEIVED=${bytes_received:-0}
+SENT=${bytes_sent:-0}
+[[ $RECEIVED =~ ^[0-9]+$ ]] || RECEIVED=0
+[[ $SENT =~ ^[0-9]+$ ]] || SENT=0
+DURATION=${time_duration:-0}
+[[ $DURATION =~ ^[0-9]+$ ]] || DURATION=0
+
+bytes_to_human() {
+    local B=${1:-0} D='' S=0
+    local H=(B K M G T P)
+    while ((B > 1024)); do
+        D=".$(printf "%02d" $((B % 1024 * 100 / 1024)))"
+        B=$((B / 1024))
+        ((S++))
+    done
+    echo "$B$D${H[$S]}B"
+}
+
+printf '%s,DISCONNECT,%s,%s,%s,%s\n' "$DATETIME" "$CN" "$PUBLIC_IP" "$RECEIVED" "$SENT" >> "$LOG_FILE" 2>/dev/null
+
+# User's view: upload = what the server received (bytes_received).
+MESSAGE="❌ <b>VPN User Disconnected</b>
+${LINE}
+👤 User: $(esc "$common_name")
+🌐 Public IP: ${trusted_ip}
+🔒 VPN IP: ${ifconfig_pool_remote_ip}
+${LINE}
+🖥️ Server: $(hostname)
+📡 Server IP: ${SERVER_IP}
+🕐 Time: ${DATETIME}
+⏱️ Duration: $(( DURATION / 60 )) min
+${LINE}
+📊 Data Usage:
+  ⬆️ Upload: $(bytes_to_human "$RECEIVED")
+  ⬇️ Download: $(bytes_to_human "$SENT")
+${LINE}
+📱 Device: ${DEVICE}"
+
+if [[ -n ${TELEGRAM_BOT_TOKEN:-} && -n ${TELEGRAM_CHAT_ID:-} ]]; then
+  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" |
+    curl -s -m 10 --config - --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=${MESSAGE}" -d parse_mode=HTML >/dev/null 2>&1 &
+fi
+
+exit 0
+DISCONNECT_SH_EOF
+}
+
+# Writes connect.sh/disconnect.sh into $1; a differing old copy is kept root-only (it may embed a token).
+install_event_scripts() {
+    local dir="$1" name f ts
+    ts=$(date +%Y%m%d%H%M%S)
+    for name in connect disconnect; do
+        f="$dir/$name.sh"
+        "write_${name}_script" > "$f.new"
+        if [ -f "$f" ] && ! cmp -s "$f" "$f.new"; then
+            cp "$f" "$f.bak.$ts" && chmod 600 "$f.bak.$ts"
+        fi
+        chmod 755 "$f.new"
+        mv "$f.new" "$f"
+    done
+}
+
+# Appends only missing directives (backup first); an existing one is never changed, only warned about.
+ensure_openvpn_conf() {
+    local conf="$1" dir="$2" want kw have
+    local -a missing=() wanted=(
+        "status /var/log/openvpn/status.log"
+        "status-version 2"
+        "log-append /var/log/openvpn/openvpn.log"
+        "verb 3"
+        "script-security 2"
+        "client-connect $dir/connect.sh"
+        "client-disconnect $dir/disconnect.sh")
+    OVPN_CONF_CHANGED=0
+    for want in "${wanted[@]}"; do
+        kw=${want%% *}
+        # `log`/`syslog` already decide where OpenVPN logs, so they block log-append too.
+        have=$(awk -v k="$kw" '$1 == k || (k == "log-append" && ($1 == "log" || $1 == "syslog")) { $1 = $1; print; exit }' "$conf")
+        if [ -z "$have" ]; then
+            missing+=("$want")
+        elif [ "$have" != "$want" ]; then
+            echo "⚠️  $conf already has '$have' (wanted '$want'); left unchanged."
+        fi
+    done
+    [ ${#missing[@]} -gt 0 ] || return 0
+    cp -p "$conf" "$conf.bak.$(date +%Y%m%d%H%M%S)"
+    [ -z "$(tail -c1 "$conf")" ] || echo >> "$conf"
+    printf '%s\n' "# Added by deploymentovpn.sh: access logs for the dashboard agent" "${missing[@]}" >> "$conf"
+    OVPN_CONF_CHANGED=1
+    echo "✅ Added to $conf: ${missing[*]}"
+}
+
+setup_access_logging() {
+    echo ""
+    echo "═══════════════════════════════════════════════"
+    echo "📝 CONFIGURING OPENVPN ACCESS LOGS"
+    echo "═══════════════════════════════════════════════"
+    echo ""
+    OVPN_CONF_CHANGED=0
+    if ! detect_openvpn_conf; then
+        echo "⚠️  No server.conf found in /etc/openvpn or /etc/openvpn/server; access logs not configured."
+        return 0
+    fi
+    local dir
+    dir=$(dirname "$OVPN_CONF")
+    install_event_scripts "$dir"
+    echo "✅ Event scripts installed in ${dir#"$OVPN_ROOT"}. Telegram (optional): put TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in ${dir#"$OVPN_ROOT"}/telegram.env (root:nogroup 0640)."
+    ensure_openvpn_conf "$OVPN_CONF" "${dir#"$OVPN_ROOT"}"
+}
+
+# Restart only after a config change, and only on --yes or an explicit "y".
+restart_openvpn_if_changed() {
+    if [ "$OVPN_CONF_CHANGED" != 1 ]; then
+        echo "ℹ️  OpenVPN config unchanged; no restart needed."
+        return 0
+    fi
+    local choice=y
+    [ "$ASSUME_YES" = 1 ] || read -p "server.conf changed. Restart $OVPN_UNIT now (connected users reconnect)? [y/N]: " choice || true
+    if [[ "${choice,,}" == "y" ]]; then
+        systemctl restart "$OVPN_UNIT" && echo "✅ $OVPN_UNIT restarted." || echo "⛔ Restart failed; check: journalctl -u $OVPN_UNIT"
+    else
+        echo "ℹ️  Not restarted. Run later: systemctl restart $OVPN_UNIT"
+    fi
+}
+
 # --- Systemd and Final Setup ---
 # --- GANTI SEMUA FUNGSI LOGROTATE LAMA DENGAN TIGA FUNGSI BARU INI ---
 
@@ -1126,11 +1326,11 @@ setup_openvpn_logrotate() {
     echo ""
 
     local log_file="/var/log/openvpn/openvpn.log"
-    local rotate_conf_dir="/etc/logrotate.d"
+    local rotate_conf_dir="$OVPN_ROOT/etc/logrotate.d"
     local new_conf_file="$rotate_conf_dir/openvpn-main-log"
 
     # Periksa apakah sudah ada file konfigurasi yang mengatur log ini
-    if grep -rq "$log_file" "$rotate_conf_dir"; then
+    if grep -rq --exclude="${new_conf_file##*/}" "$log_file" "$rotate_conf_dir"; then
         echo "✅ Log rotation for $log_file seems to be already configured. Skipping."
         return
     fi
@@ -1155,12 +1355,8 @@ setup_openvpn_logrotate() {
     # Kompres file log yang sudah dirotasi
     compress
     delaycompress
-    # Jalankan skrip post-rotasi hanya sekali
-    sharedscripts
-    # Beritahu OpenVPN untuk menggunakan file log baru setelah rotasi
-    postrotate
-        systemctl reload openvpn-server@server >/dev/null 2>&1 || true
-    endscript
+    # OpenVPN keeps its log-append handle open, so copy then truncate in place
+    copytruncate
 }
 EOF
         echo "✅ Logrotate configuration created successfully."
@@ -1177,10 +1373,10 @@ setup_user_activity_logrotate() {
     echo ""
 
     local log_file="/var/log/openvpn/user_activity.log"
-    local rotate_conf_dir="/etc/logrotate.d"
+    local rotate_conf_dir="$OVPN_ROOT/etc/logrotate.d"
     local new_conf_file="$rotate_conf_dir/openvpn-activity-log"
 
-    if grep -rq "$log_file" "$rotate_conf_dir"; then
+    if grep -rq --exclude="${new_conf_file##*/}" "$log_file" "$rotate_conf_dir"; then
         echo "✅ Log rotation for $log_file seems to be already configured. Skipping."
         return
     fi
@@ -1199,7 +1395,7 @@ setup_user_activity_logrotate() {
     notifempty
     compress
     delaycompress
-    # Buat ulang file log dengan izin yang benar setelah rotasi
+    # Writers reopen the file per line, so rename + create is safe; delaycompress keeps .1 readable for the agent
     create 0640 nobody nogroup
 }
 EOF
@@ -1217,10 +1413,10 @@ setup_agent_logrotate() {
     echo ""
 
     local agent_log_path="$SCRIPT_DIR/logs"
-    local rotate_conf_dir="/etc/logrotate.d"
+    local rotate_conf_dir="$OVPN_ROOT/etc/logrotate.d"
     local new_conf_file="$rotate_conf_dir/openvpn-agent-logs"
 
-    if grep -rq "$agent_log_path" "$rotate_conf_dir"; then
+    if grep -rq --exclude="${new_conf_file##*/}" "$agent_log_path" "$rotate_conf_dir"; then
         echo "✅ Log rotation for agent logs seems to be already configured. Skipping."
         return
     fi
@@ -1234,9 +1430,7 @@ setup_agent_logrotate() {
         # Fixed the EOF delimiter - removed quotes to allow variable expansion
         cat << EOF | tee "$new_conf_file" > /dev/null
 $SCRIPT_DIR/logs/*.log {
-    # Rotasi setiap bulan
-    monthly
-    # Simpan 2 file log lama (2 bulan)
+    # Simpan 2 file log lama
     rotate 2
     # Rotasi juga jika file lebih besar dari 10MB
     size 10M
@@ -1247,6 +1441,8 @@ $SCRIPT_DIR/logs/*.log {
     # Kompres file log yang sudah dirotasi
     compress
     delaycompress
+    # systemd holds StandardOutput=append: open, so the file must keep its inode
+    copytruncate
 }
 EOF
         echo "✅ Agent logrotate configuration created successfully."
@@ -1290,6 +1486,7 @@ configure_systemd() {
 }
 
 main() {
+    [[ " $* " != *" --yes "* ]] || ASSUME_YES=1
     check_sudo
     get_user_input
     cleanup_old_pm2_installation
@@ -1300,24 +1497,13 @@ main() {
     install_dependencies
     create_env_file
     deploy_scripts
+    setup_access_logging
     create_systemd_service_file
     setup_openvpn_logrotate
     setup_user_activity_logrotate
     setup_agent_logrotate
     configure_systemd
-    read -p "Do you want to rotate logs and restart openvpn@server now? (y/N): " rotate_choice
-    rotate_choice=${rotate_choice:-n}
-    if [[ "${rotate_choice,,}" == "y" ]]; then
-        echo "🔄 Rotating logs and restarting openvpn@server..."
-        logrotate -d /etc/logrotate.conf
-        logrotate -f /etc/logrotate.conf
-        systemctl restart openvpn@server
-        echo "✅ Logs rotated and openvpn@server restarted."
-    elif [[ "${rotate_choice,,}" != "n" && -n "$rotate_choice" ]]; then
-        echo "⚠️  Invalid input, skipping log rotation and openvpn@server restart."
-    else
-        echo "ℹ️  Skipping log rotation and openvpn@server restart."
-    fi
+    restart_openvpn_if_changed
 
     echo ""
     echo "🎉 DEPLOYMENT COMPLETE (ULTIMATE MODE: FEATURE-COMPLETE & RAM-OPTIMIZED)"
@@ -1326,4 +1512,5 @@ main() {
     echo "🔧 Manage with: sudo systemctl {status|stop|restart} $APP_NAME"
 }
 
-main "$@"
+# Sourcing (tests) loads functions only.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
