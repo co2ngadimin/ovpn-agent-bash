@@ -58,19 +58,42 @@ BAK="$DIR/main.py.bak.$(date +%Y%m%d%H%M%S)"
 cp -p "$DIR/main.py" "$BAK"
 # Stage next to the target (same filesystem) so the swap is an atomic rename.
 cp "$T/main.py" "$DIR/main.py.new"
-chmod --reference="$DIR/main.py" "$DIR/main.py.new"
-chown --reference="$DIR/main.py" "$DIR/main.py.new"
+{ chmod --reference="$DIR/main.py" "$DIR/main.py.new" && chown --reference="$DIR/main.py" "$DIR/main.py.new"; } \
+  || { rm -f "$DIR/main.py.new"; die "cannot copy perms/owner; nothing changed"; }
 mv -f "$DIR/main.py.new" "$DIR/main.py"
 
-if systemctl restart "$SVC" && sleep 15 && systemctl is-active --quiet "$SVC"; then
+# Restore the old agent and say honestly whether it is running again. Always attempts the restart.
+rollback() {
+  trap - INT TERM HUP
+  cp -p "$BAK" "$DIR/main.py" || echo "WARNING: could not restore $BAK" >&2
+  systemctl restart "$SVC" || true
+  sleep 3
+  if systemctl is-active --quiet "$SVC" && cmp -s "$BAK" "$DIR/main.py"; then
+    echo "Rolled back, old agent active ($BAK)." >&2
+  else
+    echo "ROLLBACK FAILED - old agent not active, run: cp -p '$BAK' '$DIR/main.py' && systemctl restart $SVC" >&2
+  fi
+}
+trap 'rollback; exit 1' INT TERM HUP
+
+# Restart=always would hide a crash loop behind "active", so also require an unchanged MainPID.
+healthy=0
+if systemctl restart "$SVC"; then
+  PID1=$(systemctl show -p MainPID --value "$SVC")
+  sleep 15
+  PID2=$(systemctl show -p MainPID --value "$SVC")
+  if systemctl is-active --quiet "$SVC" && [ "$PID1" != 0 ] && [ "$PID1" = "$PID2" ]; then healthy=1; fi
+fi
+
+if [ "$healthy" = 1 ]; then
+  trap - INT TERM HUP
   journalctl -u "$SVC" -n 20 --no-pager || true
   echo "Upgrade OK. Backup: $BAK"
   echo "Rollback: cp -p '$BAK' '$DIR/main.py' && systemctl restart $SVC"
   exit 0
 fi
 
-echo "Service failed after upgrade; rolling back." >&2
+echo "Service unhealthy after upgrade; rolling back." >&2
 journalctl -u "$SVC" -n 20 --no-pager >&2 || true
-cp -p "$BAK" "$DIR/main.py"
-systemctl restart "$SVC" || true
-die "rolled back to $BAK"
+rollback
+exit 1

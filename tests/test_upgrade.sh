@@ -24,4 +24,38 @@ if EXTRACT_ONLY=1 bash upgrade-agent.sh "$D/unt.sh" "$D/unt.py" 2>/dev/null; the
 if [ "$(id -u)" -ne 0 ]; then
   if bash upgrade-agent.sh main 2>"$D/err"; then bad "non-root refused"; else grep -qi root "$D/err" && ok "non-root refused" || bad "non-root message"; fi
 fi
+
+# 5. real mode with PATH stubs (no root, no network, no systemd, no real sleeping)
+REPO=$PWD
+run_real() { # $1=scenario: ok | 404 | crash
+  local S="$D/$1"; mkdir -p "$S/bin" "$S/agent" "$S/venv/bin"
+  ln -s "$(command -v python3)" "$S/venv/bin/python3"
+  echo OLD > "$S/agent/main.py"; echo SECRET > "$S/agent/.env"; echo 100 > "$S/pid"
+  [ "$1" = 404 ] && touch "$S/404"; [ "$1" = crash ] && touch "$S/crash"
+  printf '#!/bin/sh\necho 0\n' > "$S/bin/id"
+  printf '#!/bin/sh\n[ -f %s/crash ] && { rm %s/crash; echo 101 > %s/pid; }\nexit 0\n' "$S" "$S" "$S" > "$S/bin/sleep"
+  printf '#!/bin/sh\n[ -f %s/404 ] && exit 22\ncp "%s/deploymentovpn.sh" "$4"\n' "$S" "$REPO" > "$S/bin/curl"
+  printf '#!/bin/sh\nexit 0\n' > "$S/bin/journalctl"
+  cat > "$S/bin/systemctl" <<SC
+#!/bin/sh
+case "\$1" in
+  cat|restart|is-active) exit 0 ;;
+  show) case "\$3" in
+    WorkingDirectory) echo $S/agent ;;
+    ExecStart) echo "{ path=$S/venv/bin/python3 ; argv[]=$S/venv/bin/python3 $S/agent/main.py ; }" ;;
+    MainPID) cat $S/pid ;; esac ;;
+esac
+SC
+  chmod +x "$S"/bin/*
+  PATH="$S/bin:$PATH" bash upgrade-agent.sh main >"$S/out" 2>&1; echo $? > "$S/rc"
+}
+run_real ok
+[ "$(cat $D/ok/rc)" = 0 ] && grep -q AGENT_VERSION "$D/ok/agent/main.py" && ls "$D"/ok/agent/main.py.bak.* >/dev/null 2>&1 \
+  && [ "$(cat $D/ok/agent/.env)" = SECRET ] && ok "real: success" || { bad "real: success"; cat "$D/ok/out"; }
+run_real 404
+[ "$(cat $D/404/rc)" != 0 ] && [ "$(cat $D/404/agent/main.py)" = OLD ] && ! ls "$D"/404/agent/main.py.bak.* >/dev/null 2>&1 \
+  && ok "real: 404 untouched" || { bad "real: 404 untouched"; cat "$D/404/out"; }
+run_real crash
+[ "$(cat $D/crash/rc)" != 0 ] && [ "$(cat $D/crash/agent/main.py)" = OLD ] && grep -q "Rolled back" "$D/crash/out" \
+  && ok "real: crash loop rolled back" || { bad "real: crash loop rolled back"; cat "$D/crash/out"; }
 exit $fail
