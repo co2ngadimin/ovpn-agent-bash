@@ -448,6 +448,7 @@ EASY_RSA_INDEX_PATH="$EASY_RSA_INDEX_PATH"
 EASY_RSA_SERVER_NAME_PATH="$EASY_RSA_SERVER_NAME_PATH"
 OVPN_ACTIVITY_LOG_PATH="/var/log/openvpn/user_activity.log"
 OPENVPN_LOG_PATH="/var/log/openvpn/openvpn.log"
+OPENVPN_UNIT="$(openvpn_unit)"
 SERVICE_NAME="$APP_NAME"
 METRICS_INTERVAL_SECONDS="$METRICS_INTERVAL"
 CPU_RAM_MONITORING_INTERVAL="$CPU_RAM_INTERVAL"
@@ -494,6 +495,7 @@ import hashlib
 import re
 import glob
 import json
+import subprocess
 from datetime import datetime, timezone
 from typing import Dict, Optional, List
 from dotenv import load_dotenv
@@ -516,6 +518,7 @@ EASY_RSA_INDEX_PATH = os.getenv("EASY_RSA_INDEX_PATH")
 EASY_RSA_SERVER_NAME_PATH = os.getenv("EASY_RSA_SERVER_NAME_PATH")
 OVPN_ACTIVITY_LOG_PATH = os.getenv("OVPN_ACTIVITY_LOG_PATH")
 OPENVPN_LOG_PATH = os.getenv("OPENVPN_LOG_PATH")
+OPENVPN_UNIT = os.getenv("OPENVPN_UNIT", "openvpn@server")  # nodes installed before this setting have the old unit
 METRICS_INTERVAL = int(os.getenv("METRICS_INTERVAL_SECONDS", "60"))
 CPU_RAM_MONITORING_INTERVAL_STR = os.getenv("CPU_RAM_MONITORING_INTERVAL", "60")
 LOG_BATCH_SIZE = 500
@@ -595,8 +598,8 @@ def sanitize_username(username: str) -> str:
 
 def get_openvpn_service_status() -> str:
     try:
-        result = os.system("systemctl is-active --quiet openvpn@server")
-        return "running" if result == 0 else "stopped"
+        result = subprocess.run(["systemctl", "is-active", "--quiet", OPENVPN_UNIT])
+        return "running" if result.returncode == 0 else "stopped"
     except:
         return "error"
 
@@ -814,6 +817,14 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
         last_position = 0
     elif current_stat.st_size < last_position:
         print(f"Log truncation detected for {log_key}. Reading from start.")
+        rotated = base_path + ".1"
+        # copytruncate copied our unread tail into .1; a shorter .1 is not that copy.
+        try:
+            copied = os.path.getsize(rotated) >= last_position
+        except OSError:
+            copied = False
+        if copied and not read_log_from(log_key, rotated, current_inode, last_position, parser_func, endpoint, headers, agent_state):
+            return
         last_position = 0
 
     read_log_from(log_key, base_path, current_inode, last_position, parser_func, endpoint, headers, agent_state)
@@ -1131,6 +1142,10 @@ detect_openvpn_conf() {
     else
         return 1
     fi
+}
+
+openvpn_unit() {
+    if detect_openvpn_conf; then echo "$OVPN_UNIT"; else echo openvpn@server; fi
 }
 
 write_connect_script() {

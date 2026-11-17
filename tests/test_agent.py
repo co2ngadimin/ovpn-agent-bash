@@ -235,6 +235,41 @@ class TailTest(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.dir)), ["state.json", "user_activity.log"])  # no temp file left
 
 
+    def test_copytruncate_ships_tail_from_dot1_once(self):
+        self._append(self.log, "aaaa")
+        self._run()
+        self._append(self.log, "tail")
+        with open(self.log) as src, open(self.log + ".1", "w") as dst: dst.write(src.read())
+        open(self.log, "w").close()
+        self._append(self.log, "n")
+        self.assertEqual(self._run(), ["tail", "n"])
+        self.assertEqual(self._run(), [])
+
+    def test_truncation_ignores_short_dot1(self):
+        self._append(self.log, "aaaa", "bbbb")
+        self._run()
+        self._append(self.log + ".1", "x")
+        open(self.log, "w").close()
+        self._append(self.log, "c")
+        self.assertEqual(self._run(), ["c"])
+
+
+class ServiceStatusTest(unittest.TestCase):
+    def _status(self, unit, rc):
+        agent = load_agent()
+        if unit: agent.OPENVPN_UNIT = unit
+        with mock.patch.object(agent.subprocess, "run", return_value=mock.Mock(returncode=rc)) as run:
+            st = agent.get_openvpn_service_status()
+        return st, run.call_args[0][0]
+
+    def test_default_unit_old_nodes(self):
+        self.assertEqual(self._status(None, 0), ("running", ["systemctl", "is-active", "--quiet", "openvpn@server"]))
+
+    def test_new_layout_unit(self):
+        self.assertEqual(self._status("openvpn-server@server", 3),
+                         ("stopped", ["systemctl", "is-active", "--quiet", "openvpn-server@server"]))
+
+
 class ActivityParseTest(unittest.TestCase):
     def setUp(self):
         self.agent = load_agent()

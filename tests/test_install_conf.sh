@@ -29,6 +29,10 @@ ls "$C".bak.* >/dev/null 2>&1 && ok "backup made" || bad "backup made"
 [ -x "$R/etc/openvpn/server/connect.sh" ] && [ -x "$R/etc/openvpn/server/disconnect.sh" ] && ok "scripts installed" || bad "scripts installed"
 bash -n "$R/etc/openvpn/server/connect.sh" && bash -n "$R/etc/openvpn/server/disconnect.sh" && ok "scripts syntax" || bad "scripts syntax"
 
+( load "$D/new"; [ "$(openvpn_unit)" = openvpn-server@server ] ) && ok "env unit new layout" || bad "env unit new layout"
+( load "$D/none"; [ "$(openvpn_unit)" = openvpn@server ] ) && ok "env unit default" || bad "env unit default"
+grep -q '^OPENVPN_UNIT="$(openvpn_unit)"$' deploymentovpn.sh && ok "unit written to .env" || bad "unit written to .env"
+
 # 2. idempotent: second run changes nothing, no new backup
 cp "$C" "$D/before"; nb=$(ls "$C".bak.* | wc -l)
 ( load "$R"; detect_openvpn_conf; setup_access_logging >/dev/null; [ "$OVPN_CONF_CHANGED" = 0 ] ) && ok "rerun: flag 0" || bad "rerun: flag 0"
