@@ -1,0 +1,4 @@
+TITLE,OpenVPN 2.5
+HEADER,CLIENT_LIST,Common Name,Real Address,Virtual Address,Virtual IPv6 Address,Bytes Received,Bytes Sent,Connected Since,Connected Since (time_t),Username,Client ID,Peer ID
+CLIENT_LIST,andi,103.10.20.30:51234,10.8.0.2,,1000,2000,2026-11-17 10:00:00,1794884400,UNDEF,0,0
+END

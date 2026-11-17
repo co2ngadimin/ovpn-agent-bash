@@ -1,0 +1,11 @@
+OpenVPN CLIENT LIST
+Updated,Tue Nov 17 11:43:14 2026
+Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since
+Andi,103.10.20.30:51234,1000,2000,Tue Nov 17 10:00:00 2026
+budi,udp4:36.80.1.2:1194,10,20,Tue Nov 17 09:30:00 2026
+citra,[2001:db8::1]:40000,1,2,Tue Nov 17 08:00:00 2026
+ROUTING TABLE
+Virtual Address,Common Name,Real Address,Last Ref
+10.8.0.2,andi,103.10.20.30:51234,Tue Nov 17 11:43:00 2026
+GLOBAL STATS
+END

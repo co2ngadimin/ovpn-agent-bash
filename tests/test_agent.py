@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -35,6 +36,55 @@ class ActivityTimestampTest(unittest.TestCase):
 
     def test_activity_timestamp_utc_host_unchanged(self):
         self.assertEqual(self._ts("UTC"), "2026-11-17T10:00:00+00:00")
+
+
+class ClientsTest(unittest.TestCase):
+    FIX = os.path.join(os.path.dirname(__file__), "fixtures")
+
+    def setUp(self):
+        self.agent = load_agent()
+        self.old_tz = os.environ.get("TZ")
+        self.addCleanup(self._restore_tz)
+        os.environ["TZ"] = "Asia/Jakarta"
+        time.tzset()
+
+    def _restore_tz(self):
+        if self.old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self.old_tz
+        time.tzset()
+
+    def _get(self, name):
+        return self.agent.get_openvpn_clients(os.path.join(self.FIX, name))
+
+    def test_clients_v1_26(self):
+        c = self._get("status-v1-26.log")
+        self.assertEqual(len(c), 3)
+        self.assertEqual(c[0], {"cn": "andi", "realAddress": "103.10.20.30", "connectedSince": 1794884400})
+        self.assertEqual(c[1]["realAddress"], "36.80.1.2")
+        self.assertEqual(c[2]["realAddress"], "2001:db8::1")
+
+    def test_clients_v1_24(self):
+        self.assertEqual(self._get("status-v1-24.log")[0]["connectedSince"], 1794884400)
+
+    def test_clients_v2_uses_since_t(self):
+        c = self._get("status-v2.log")
+        self.assertEqual(c[0]["connectedSince"], 1794884400)
+        self.assertEqual(c[0]["realAddress"], "103.10.20.30")
+
+    def test_clients_missing_file(self):
+        self.assertEqual(self._get("nope.log"), [])
+
+    def test_clients_bad_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.log")
+            with open(p, "w") as f:
+                f.write("Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since\n"
+                        "x,1.2.3.4:5,1,2,garbage\nROUTING TABLE\n")
+            c = self.agent.get_openvpn_clients(p)
+        self.assertEqual(len(c), 1)
+        self.assertIsNone(c[0]["connectedSince"])
 
 
 class SendBatchTest(unittest.TestCase):

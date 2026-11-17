@@ -516,6 +516,7 @@ OPENVPN_LOG_PATH = os.getenv("OPENVPN_LOG_PATH")
 METRICS_INTERVAL = int(os.getenv("METRICS_INTERVAL_SECONDS", "60"))
 CPU_RAM_MONITORING_INTERVAL_STR = os.getenv("CPU_RAM_MONITORING_INTERVAL", "60")
 LOG_BATCH_SIZE = 500
+AGENT_VERSION = "1.1.0"
 STATE_FILE_PATH = os.path.join(SCRIPT_DIR, ".agent_state.json")
 
 if CPU_RAM_MONITORING_INTERVAL_STR.lower() == "disabled":
@@ -603,28 +604,47 @@ def get_server_cn() -> str:
             pass
     return "server_irL5Kfmg3FnRZaGE"
 
-def get_openvpn_active_users() -> list:
-    users = []
-    status_log_path = "/var/log/openvpn/status.log"
-    if not os.path.exists(status_log_path):
-        return []
+_REAL_ADDR_RE = re.compile(r'^(?:[a-z][a-z0-9-]*:)?(?:\[([^\]]+)\]|([^:]+)):\d+$', re.I)
+MAX_CLIENTS = 200
+
+def _parse_status_time(s: str):
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%a %b %d %H:%M:%S %Y'):
+        try:
+            return int(time.mktime(time.strptime(s.strip(), fmt)))
+        except ValueError:
+            pass
+    return None
+
+def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") -> list:
+    """Connected clients from status.log (v1 CSV, v2/v3 CLIENT_LIST rows)."""
+    clients = []
     try:
         with open(status_log_path, 'r') as f:
-            content = f.read()
             parsing = False
-            for line in content.split('\n'):
+            for line in f.read().split('\n'):
                 if line.startswith("Common Name,Real Address"):
                     parsing = True
                     continue
                 if line.startswith("ROUTING TABLE") or line.startswith("GLOBAL STATS"):
-                    break
-                if parsing and line:
-                    parts = line.split(',')
-                    if parts and parts[0]:
-                        users.append(parts[0].lower())
-    except:
-        pass
-    return users
+                    parsing = False
+                    continue
+                if line.startswith("CLIENT_LIST"):  # v2 (comma) / v3 (tab)
+                    p = line.split('\t' if '\t' in line else ',')
+                    cn, addr = p[1], p[2]
+                    since = int(p[8]) if len(p) > 8 and p[8].isdigit() else None
+                elif parsing and line:
+                    p = line.split(',')
+                    if len(p) < 5:
+                        continue
+                    cn, addr, since = p[0], p[1], _parse_status_time(p[4])
+                else:
+                    continue
+                m = _REAL_ADDR_RE.match(addr.strip())
+                if cn and m:
+                    clients.append({"cn": cn.lower(), "realAddress": m.group(1) or m.group(2), "connectedSince": since})
+    except Exception:
+        return []
+    return clients[:MAX_CLIENTS]
 
 def run_command(cmd: list) -> None:
     import subprocess
@@ -928,10 +948,13 @@ def main_loop():
             # ---------------------------------------
 
             # 1. Report Status
+            clients = get_openvpn_clients()
             status_payload = {
                 "serverId": SERVER_ID,
                 "serviceStatus": get_openvpn_service_status(),
-                "activeUsers": get_openvpn_active_users(),
+                "activeUsers": [c["cn"] for c in clients],
+                "clients": clients,
+                "agentVersion": AGENT_VERSION,
             }
             if CPU_RAM_MONITORING_INTERVAL is not None:
                 status_payload["cpuUsage"] = get_cpu_usage()
