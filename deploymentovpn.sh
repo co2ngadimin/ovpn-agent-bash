@@ -604,8 +604,14 @@ def get_server_cn() -> str:
             pass
     return "server_irL5Kfmg3FnRZaGE"
 
-_REAL_ADDR_RE = re.compile(r'^(?:[a-z][a-z0-9-]*:)?(?:\[([^\]]+)\]|([^:]+)):\d+$', re.I)
-MAX_CLIENTS = 200
+MAX_CLIENTS = 200  # cap applies to the `clients` payload only, not activeUsers
+
+def _real_host(addr: str) -> str:
+    """Strip optional proto prefix (udp4:, tcp4-server:) and port; best-effort, dashboard validates with net.isIP."""
+    a = re.sub(r'^(?:udp|tcp)[46]?(?:-[a-z]+)?:', '', addr.strip(), flags=re.I)
+    if a.startswith('['):
+        return a[1:].partition(']')[0]
+    return a.rsplit(':', 1)[0]
 
 def _parse_status_time(s: str):
     for fmt in ('%Y-%m-%d %H:%M:%S', '%a %b %d %H:%M:%S %Y'):
@@ -630,6 +636,8 @@ def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") ->
                     continue
                 if line.startswith("CLIENT_LIST"):  # v2 (comma) / v3 (tab)
                     p = line.split('\t' if '\t' in line else ',')
+                    if len(p) < 3:
+                        continue
                     cn, addr = p[1], p[2]
                     since = int(p[8]) if len(p) > 8 and p[8].isdigit() else None
                 elif parsing and line:
@@ -639,12 +647,11 @@ def get_openvpn_clients(status_log_path: str = "/var/log/openvpn/status.log") ->
                     cn, addr, since = p[0], p[1], _parse_status_time(p[4])
                 else:
                     continue
-                m = _REAL_ADDR_RE.match(addr.strip())
-                if cn and m:
-                    clients.append({"cn": cn.lower(), "realAddress": m.group(1) or m.group(2), "connectedSince": since})
+                if cn and cn != "UNDEF":  # UNDEF = client mid-handshake
+                    clients.append({"cn": cn.lower(), "realAddress": _real_host(addr), "connectedSince": since})
     except Exception:
         return []
-    return clients[:MAX_CLIENTS]
+    return clients
 
 def run_command(cmd: list) -> None:
     import subprocess
@@ -953,7 +960,7 @@ def main_loop():
                 "serverId": SERVER_ID,
                 "serviceStatus": get_openvpn_service_status(),
                 "activeUsers": [c["cn"] for c in clients],
-                "clients": clients,
+                "clients": clients[:MAX_CLIENTS],
                 "agentVersion": AGENT_VERSION,
             }
             if CPU_RAM_MONITORING_INTERVAL is not None:

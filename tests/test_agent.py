@@ -73,6 +73,34 @@ class ClientsTest(unittest.TestCase):
         self.assertEqual(c[0]["connectedSince"], 1794884400)
         self.assertEqual(c[0]["realAddress"], "103.10.20.30")
 
+    def _write(self, body):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        p = os.path.join(d.name, "s.log")
+        with open(p, "w") as f:
+            f.write(body)
+        return self.agent.get_openvpn_clients(p)
+
+    def test_truncated_client_list_row_skipped_only(self):
+        c = self._write("CLIENT_LIST\nCLIENT_LIST,andi,1.2.3.4:5,10.8.0.2,,1,2,x,1794884400\n")
+        self.assertEqual([x["cn"] for x in c], ["andi"])
+
+    def test_v3_tab_separated(self):
+        c = self._write("CLIENT_LIST\tandi\t1.2.3.4:5\t10.8.0.2\t\t1\t2\tx\t1794884400\n")
+        self.assertEqual(c, [{"cn": "andi", "realAddress": "1.2.3.4", "connectedSince": 1794884400}])
+
+    def test_undef_skipped(self):
+        c = self._write("CLIENT_LIST,UNDEF,1.2.3.4:5,,,1,2,x,1794884400\n"
+                        "Common Name,Real Address,B,B,Connected Since\nUNDEF,1.2.3.4:5,1,2,garbage\n")
+        self.assertEqual(c, [])
+
+    def test_unbracketed_ipv6_kept(self):
+        c = self._write("Common Name,Real Address,B,B,Connected Since\n"
+                        "a,2001:db8::1:40000,1,2,garbage\nb,::ffff:1.2.3.4:5678,1,2,garbage\n"
+                        "c,udp6:::ffff:1.2.3.4:5678,1,2,garbage\n")
+        self.assertEqual([(x["cn"], x["realAddress"]) for x in c],
+                         [("a", "2001:db8::1"), ("b", "::ffff:1.2.3.4"), ("c", "::ffff:1.2.3.4")])
+
     def test_agent_version(self):
         self.assertEqual(self.agent.AGENT_VERSION, "2.0.0-geo")
 
