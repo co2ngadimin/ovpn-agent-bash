@@ -160,6 +160,18 @@ sudo systemctl disable openvpn-agent
 
 ------------------------------------------------------------------------
 
+## Upgrade agent (node yang sudah terpasang)
+
+Jalankan sebagai root di node (ganti `<git-ref>` dengan branch/tag/commit):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/co2ngadimin/ovpn-agent-bash/<git-ref>/upgrade-agent.sh | sudo bash -s -- <git-ref>
+```
+
+Script hanya mengganti `main.py` (backup `main.py.bak.<timestamp>`), restart service agent, dan rollback otomatis jika service tidak aktif. `.env`, `.agent_state.json`, OpenVPN, PM2, dan snmpd tidak disentuh. Nama service default `openvpn-agent`; override dengan `SERVICE_NAME=...`.
+
+> **Jangan jalankan ulang `deploymentovpn.sh` untuk upgrade.**
+
 ## 🛠️ Requirements and Dependencies
 
 The agent requires the following system packages:
