@@ -969,7 +969,7 @@ def parse_activity_log_line(line: str) -> Optional[Dict]:
     parts = line.strip().split(',')
     if len(parts) < 2: return None
     try:
-        ts = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S').isoformat() + "Z"
+        ts = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S').astimezone(timezone.utc).isoformat()
         action, username = parts[1], (parts[2] if len(parts) > 2 else None)
         public_ip, vpn_ip, bytes_r, bytes_s = (parts[3] if len(parts) > 3 else None), None, None, None
         if action == "CONNECT" and len(parts) > 4: vpn_ip = parts[4]
