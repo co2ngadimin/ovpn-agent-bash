@@ -80,6 +80,16 @@ printf '/var/log/openvpn/openvpn.log {\n postrotate\n endscript\n}\n' > "$L/open
 ( load "$R"; setup_openvpn_logrotate ) <<< y >/dev/null
 grep -q postrotate "$L/openvpn-main-log" && bad "own config refreshed" || ok "own config refreshed"
 
+# 7b. Telegram fires when telegram.env sets both vars (curl is backgrounded, so poll briefly)
+printf 'TELEGRAM_BOT_TOKEN=1\nTELEGRAM_CHAT_ID=1\n' > "$D/telegram.env"
+PATH="$D/bin:$PATH" common_name=andi bash "$D/connect.sh"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$D/curl-called" ] && break; sleep 0.2; done
+[ -e "$D/curl-called" ] && ok "telegram with env" || bad "telegram with env"
+
 # 8. installer no longer force-rotates every system log
 grep -q "logrotate -f" deploymentovpn.sh && bad "no logrotate -f" || ok "no logrotate -f"
+# 9. executed via `bash -c "$(curl ...)"` main still runs (refuses non-root here)
+if [ "$(id -u)" -ne 0 ]; then
+  bash -c "$(cat deploymentovpn.sh)" </dev/null 2>&1 | grep -q "root privileges" && ok "bash -c runs main" || bad "bash -c runs main"
+fi
 exit $fail

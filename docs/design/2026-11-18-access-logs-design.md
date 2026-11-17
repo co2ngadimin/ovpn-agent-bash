@@ -42,7 +42,11 @@ Deviations / choices:
 - Every differing existing directive is warned about (not just `client-connect`/`-disconnect`); an existing `log` or `syslog` also blocks adding `log-append`.
 - If both layouts exist, the new one wins only when `openvpn-server@server` is active; otherwise the old one is used.
 - The logrotate "already configured" check now ignores the installer's own file, so a rerun rewrites an outdated `openvpn-main-log` instead of skipping it.
-- `deploymentovpn.sh` only runs `main` when executed, not when sourced (needed for the bash test).
+- `deploymentovpn.sh` only runs `main` when executed (also via `bash -c`/pipe), not when sourced (needed for the bash test).
 - The test venv for `tests/test_agent.py` is `repos/.venv` (has pycryptodome); system `python3` lacks `Crypto` and pytest is not installed, so tests run with `unittest`.
 
-Not done: no real `status.log`/server.conf sample from a node was checked; a line half-written at the moment of reading is still sent as-is (writers use one `printf` per line, so unlikely).
+Not done:
+- Existing nodes get only the agent fix (via `upgrade-agent.sh`, which replaces `main.py` only); writers, server.conf and logrotate changes need a separate rollout step, since `deploymentovpn.sh` must not be re-run on a node.
+- `copytruncate` on `openvpn.log` keeps the inode, so lines written between the last poll and the copy are lost (at most one poll interval per rotation).
+- Pre-existing: agent `get_openvpn_service_status` checks only `openvpn@server`; new-layout nodes report a wrong status (follow-up).
+- No real `status.log`/server.conf sample from a node was checked; a line half-written at the moment of reading is still sent as-is (writers use one `printf` per line, so unlikely).
