@@ -160,6 +160,95 @@ class SendBatchTest(unittest.TestCase):
         self.assertFalse(self._send(401))
 
 
+class TailTest(unittest.TestCase):
+    def setUp(self):
+        self.agent = load_agent()
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.dir = d.name
+        self.log = os.path.join(d.name, "user_activity.log")
+        self.agent.STATE_FILE_PATH = os.path.join(d.name, "state.json")
+        self.sent = []
+        self.ok = True
+        self.agent.send_batch = lambda b, e, h: (self.sent.extend(x["message"] for x in b), self.ok)[1]
+
+    def _append(self, path, *lines):
+        with open(path, "a") as f:
+            f.write("".join(l + "\n" for l in lines))
+
+    def _run(self, key="activity_log"):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.agent.process_log_file(key, self.log, self.agent.package_raw_log_line, "/x", {})
+        got, self.sent = self.sent, []
+        return got
+
+    def test_first_run_activity_reads_from_start(self):
+        self._append(self.log, "a", "b")
+        self.assertEqual(self._run(), ["a", "b"])
+        self.assertEqual(self._run(), [])
+
+    def test_first_run_openvpn_log_skips_existing(self):
+        self._append(self.log, "old")
+        self.assertEqual(self._run("openvpn_log"), [])
+        self._append(self.log, "new")
+        self.assertEqual(self._run("openvpn_log"), ["new"])
+
+    def test_rotation_reads_unread_tail_of_dot1_then_new_file(self):
+        self._append(self.log, "a")
+        self._run()
+        self._append(self.log, "tail")
+        os.rename(self.log, self.log + ".1")
+        self._append(self.log, "new")
+        self.assertEqual(self._run(), ["tail", "new"])
+        self.assertEqual(self._run(), [])
+
+    def test_rotation_without_matching_dot1_starts_new_file(self):
+        self._append(self.log, "a")
+        self._run()
+        os.rename(self.log, self.log + ".old")
+        self._append(self.log, "new")
+        self.assertEqual(self._run(), ["new"])
+
+    def test_rotation_keeps_state_when_tail_send_fails(self):
+        self._append(self.log, "a")
+        self._run()
+        self._append(self.log, "tail")
+        os.rename(self.log, self.log + ".1")
+        self._append(self.log, "new")
+        self.ok = False
+        self._run()
+        self.ok = True
+        self.assertEqual(self._run(), ["tail", "new"])
+
+    def test_truncation_resets_to_start(self):
+        self._append(self.log, "aaaa", "bbbb")
+        self._run()
+        open(self.log, "w").close()
+        self._append(self.log, "c")
+        self.assertEqual(self._run(), ["c"])
+
+    def test_state_written_atomically(self):
+        self._append(self.log, "a")
+        with mock.patch.object(self.agent.os, "replace", wraps=os.replace) as rep:
+            self._run()
+        rep.assert_called()
+        self.assertEqual(sorted(os.listdir(self.dir)), ["state.json", "user_activity.log"])  # no temp file left
+
+
+class ActivityParseTest(unittest.TestCase):
+    def setUp(self):
+        self.agent = load_agent()
+
+    def test_disconnect_line(self):
+        p = self.agent.parse_activity_log_line("2026-11-17 10:00:00,DISCONNECT,andi,1.2.3.4,100,200")
+        self.assertEqual((p["action"], p["username"], p["publicIp"], p["vpnIp"], p["bytesReceived"], p["bytesSent"]),
+                         ("DISCONNECT", "andi", "1.2.3.4", None, 100, 200))
+
+    def test_malformed_lines(self):
+        for line in ("garbage", "", "not-a-date,CONNECT,andi", "2026-11-17 10:00:00,DISCONNECT,andi,1.2.3.4,x,y"):
+            self.assertIsNone(self.agent.parse_activity_log_line(line), line)
+
+
 class ServerCnFallbackTest(unittest.TestCase):
     def test_get_server_cn_fallback_empty(self):
         agent = load_agent()

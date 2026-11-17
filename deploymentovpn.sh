@@ -541,7 +541,9 @@ def load_state():
     except (json.JSONDecodeError, FileNotFoundError): return {"files": {}}
 
 def save_state(state):
-    with open(STATE_FILE_PATH, 'w') as f: json.dump(state, f, indent=4)
+    tmp = STATE_FILE_PATH + ".tmp"
+    with open(tmp, 'w') as f: json.dump(state, f, indent=4)
+    os.replace(tmp, STATE_FILE_PATH)  # a crash mid-write must not leave a half-written state file
 
 # --- Global State ---
 last_vpn_profiles_checksum = None
@@ -797,12 +799,27 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
         return
 
     if last_inode and last_inode != current_inode:
-        print(f"Log rotation detected for {log_key}. Resetting position for new file.")
+        rotated = base_path + ".1"
+        try:
+            rotated_inode = os.stat(rotated).st_ino
+        except FileNotFoundError:
+            rotated_inode = None
+        # Lines written after our last read but before rotation live only in the predecessor.
+        if rotated_inode == last_inode and not read_log_from(log_key, rotated, last_inode, last_position, parser_func, endpoint, headers, agent_state):
+            return
+        print(f"Log rotation detected for {log_key}. Reading new file from start.")
+        last_position = 0
+    elif current_stat.st_size < last_position:
+        print(f"Log truncation detected for {log_key}. Reading from start.")
         last_position = 0
 
+    read_log_from(log_key, base_path, current_inode, last_position, parser_func, endpoint, headers, agent_state)
+
+def read_log_from(log_key, path, inode, position, parser_func, endpoint, headers, agent_state) -> bool:
+    """Send lines of path from position on; save progress per batch. False if a send failed."""
     try:
-        with open(base_path, 'r', errors='ignore') as f:
-            f.seek(last_position)
+        with open(path, 'r', errors='ignore') as f:
+            f.seek(position)
             batch = []
 
             while True:
@@ -813,22 +830,19 @@ def process_log_file(log_key: str, base_path: str, parser_func, endpoint: str, h
                 if parsed: batch.append(parsed)
 
                 if len(batch) >= LOG_BATCH_SIZE:
-                    if send_batch(batch, endpoint, headers):
-                        new_position = f.tell()
-                        agent_state["files"][log_key] = {"inode": current_inode, "position": new_position}
-                        save_state(agent_state)
-                        batch = []
-                        time.sleep(1)
-                    else:
-                        return
-
-            if batch:
-                if send_batch(batch, endpoint, headers):
-                    new_position = f.tell()
-                    agent_state["files"][log_key] = {"inode": current_inode, "position": new_position}
+                    if not send_batch(batch, endpoint, headers): return False
+                    agent_state["files"][log_key] = {"inode": inode, "position": f.tell()}
                     save_state(agent_state)
+                    batch = []
+                    time.sleep(1)
+
+            if batch and not send_batch(batch, endpoint, headers): return False
+            agent_state["files"][log_key] = {"inode": inode, "position": f.tell()}
+            save_state(agent_state)
+            return True
     except Exception as e:
         print(f"[ERROR] in process_log_file for {log_key}: {e}")
+        return False
 
 def encrypt(plain_text: str, key: bytes) -> str:
     """Enkripsi teks menggunakan AES-GCM dan mengembalikan string Base64."""
