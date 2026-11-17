@@ -56,9 +56,9 @@ get_user_input() {
         [ -z "$SERVER_ID" ] && echo "⛔ Server ID cannot be empty."
     done
     echo ""
-    while [ -z "$SECRET_ENCRYPTION_KEY" ]; do
-        read -p "🔐  Enter the ENCRYPTION KEY (e.g., SERVER-01): " SECRET_ENCRYPTION_KEY
-        [ -z "$SECRET_ENCRYPTION_KEY" ] && echo "⛔ ENCRYPTION KEY cannot be empty."
+    while [ ${#SECRET_ENCRYPTION_KEY} -lt 32 ]; do
+        read -p "🔐  Enter the ENCRYPTION KEY (min 32 karakter, mis. hasil: openssl rand -hex 16): " SECRET_ENCRYPTION_KEY
+        [ ${#SECRET_ENCRYPTION_KEY} -lt 32 ] && echo "⛔ ENCRYPTION KEY minimal 32 karakter."
     done
     echo ""
     echo "Select the Dashboard API protocol:"
@@ -602,7 +602,7 @@ def get_server_cn() -> str:
                 return f.read().strip()
         except:
             pass
-    return "server_irL5Kfmg3FnRZaGE"
+    return ""
 
 MAX_CLIENTS = 200  # cap applies to the `clients` payload only, not activeUsers
 
@@ -911,7 +911,7 @@ def main_loop():
                             
                             # Lakukan restart layanan agent
                             import subprocess
-                            subprocess.run(["sudo", "systemctl", "restart", os.getenv("SERVICE_NAME", "openvpn-agent")])
+                            subprocess.run(["sudo", "systemctl", "restart", os.getenv("SERVICE_NAME", "openvpn-agent")], check=True)
                             
                             print("🔄 Agent restart command issued successfully")
                             
@@ -932,7 +932,7 @@ def main_loop():
                             print(f"Failed to restart agent: {restart_error}")
 
                     # Kirim laporan per-item (ini tetep di dalam loop biar dashboard cepet dapet update status per user)
-                    if action_type != "DECOMMISSION_AGENT":
+                    if action_type not in ("DECOMMISSION_AGENT", "RESTART_AGENT"):
                         requests.post(f"{DASHBOARD_API_URL}/agent/action-logs/complete",
                             json={"actionLogId": action_id, **result}, headers=headers, timeout=10)
 

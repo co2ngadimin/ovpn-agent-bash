@@ -146,5 +146,12 @@ class SendBatchTest(unittest.TestCase):
         self.assertFalse(self._send(401))
 
 
+class ServerCnFallbackTest(unittest.TestCase):
+    def test_get_server_cn_fallback_empty(self):
+        agent = load_agent()
+        agent.EASY_RSA_SERVER_NAME_PATH = "/nonexistent/SERVER_NAME_GENERATED"
+        self.assertEqual(agent.get_server_cn(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
