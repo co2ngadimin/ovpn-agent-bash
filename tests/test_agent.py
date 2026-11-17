@@ -73,6 +73,9 @@ class ClientsTest(unittest.TestCase):
         self.assertEqual(c[0]["connectedSince"], 1794884400)
         self.assertEqual(c[0]["realAddress"], "103.10.20.30")
 
+    def test_agent_version(self):
+        self.assertEqual(self.agent.AGENT_VERSION, "2.0.0-geo")
+
     def test_clients_missing_file(self):
         self.assertEqual(self._get("nope.log"), [])
 
