@@ -728,8 +728,8 @@ def send_batch(batch: list, endpoint: str, headers: dict) -> bool:
     payload = {"serverId": SERVER_ID, payload_key: batch}
     try:
         response = requests.post(f"{DASHBOARD_API_URL}{endpoint}", json=payload, headers=headers, timeout=60)
-        if 400 <= response.status_code < 500:
-            print(f"Batch rejected ({response.status_code}), skipping.")
+        if response.status_code in (400, 413, 422):  # permanent rejection; 401/403/408/429 are fixable/transient, so retry
+            print(f"Batch rejected ({response.status_code}) by {endpoint}, skipping.")
             return True
         response.raise_for_status()
         print(f"Successfully sent batch of {len(batch)} logs to {endpoint}.")

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import time
 import unittest
@@ -43,7 +45,8 @@ class SendBatchTest(unittest.TestCase):
         resp = mock.Mock(status_code=status)
         if status >= 400:
             resp.raise_for_status.side_effect = self.agent.requests.HTTPError(str(status))
-        with mock.patch.object(self.agent.requests, "post", return_value=resp):
+        with mock.patch.object(self.agent.requests, "post", return_value=resp), \
+                contextlib.redirect_stdout(io.StringIO()):
             return self.agent.send_batch([{"a": 1}], "/api/openvpn-logs", {})
 
     def test_send_batch_ok_on_200(self):
@@ -54,6 +57,12 @@ class SendBatchTest(unittest.TestCase):
 
     def test_send_batch_retries_on_5xx(self):
         self.assertFalse(self._send(503))
+
+    def test_send_batch_retries_on_429(self):
+        self.assertFalse(self._send(429))
+
+    def test_send_batch_retries_on_401(self):
+        self.assertFalse(self._send(401))
 
 
 if __name__ == "__main__":
