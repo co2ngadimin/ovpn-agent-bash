@@ -17,6 +17,7 @@ def load_agent():
     """Extract the agent's Python heredoc from deploymentovpn.sh and import it."""
     text = SCRIPT.read_text()
     m = re.search(r"<< '_PYTHON_SCRIPT_EOF_'[^\n]*\n(.*?)\n_PYTHON_SCRIPT_EOF_\n", text, re.S)
+    assert m, "agent heredoc not found in deploymentovpn.sh"
     os.environ.update(ENV)  # set first: load_dotenv() does not override existing env
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "agent_main.py"
