@@ -1,6 +1,7 @@
 import os
 import time
 import unittest
+from unittest import mock
 
 from tests.agent_loader import load_agent
 
@@ -32,6 +33,27 @@ class ActivityTimestampTest(unittest.TestCase):
 
     def test_activity_timestamp_utc_host_unchanged(self):
         self.assertEqual(self._ts("UTC"), "2026-11-17T10:00:00+00:00")
+
+
+class SendBatchTest(unittest.TestCase):
+    def setUp(self):
+        self.agent = load_agent()
+
+    def _send(self, status):
+        resp = mock.Mock(status_code=status)
+        if status >= 400:
+            resp.raise_for_status.side_effect = self.agent.requests.HTTPError(str(status))
+        with mock.patch.object(self.agent.requests, "post", return_value=resp):
+            return self.agent.send_batch([{"a": 1}], "/api/openvpn-logs", {})
+
+    def test_send_batch_ok_on_200(self):
+        self.assertTrue(self._send(200))
+
+    def test_send_batch_skips_on_4xx(self):
+        self.assertTrue(self._send(422))
+
+    def test_send_batch_retries_on_5xx(self):
+        self.assertFalse(self._send(503))
 
 
 if __name__ == "__main__":
