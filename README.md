@@ -43,7 +43,7 @@ You'll need:\
 Download the deployment script:
 
 ``` bash
-wget https://raw.githubusercontent.com/SoramiKS/ovpn-agent-bash/refs/heads/main/deploymentovpn.sh -O deploymentovpn.sh
+wget https://raw.githubusercontent.com/co2ngadimin/ovpn-agent-bash/refs/heads/main/deploymentovpn.sh -O deploymentovpn.sh
 ```
 
 Make it executable and run with root privileges:
@@ -209,7 +209,7 @@ Additional requirements:
 This agent is designed to work with the OpenVPN Management Dashboard.
 The dashboard provides a modern web interface for monitoring and managing OpenVPN servers connected to this agent.
 
-👉 [OpenVPN Dashboard Repository](https://github.com/SoramiKS/openvpn-dashboard)
+👉 [OpenVPN Dashboard Repository](https://github.com/co2ngadimin/openvpn-dashboard)
 
 Integration steps:
 1. Install and run the dashboard from the repository.
